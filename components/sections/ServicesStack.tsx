@@ -1,204 +1,585 @@
 "use client";
 
 import { useRef } from "react";
-import { motion, useScroll, useTransform } from "motion/react";
+import Image from "next/image";
+import {
+  motion,
+  useMotionValue,
+  useScroll,
+  useSpring,
+  useTransform,
+  type MotionValue,
+} from "motion/react";
+import { EASE } from "@/lib/motion";
 
-type Accent = "gold" | "peacock";
+type Accent = "gold" | "peacock" | "ink" | "spectrum";
 
 type Service = {
   n: string;
   name: string;
-  tagline: string;
-  body: string;
-  chips: string[];
-  usp: string;
+  description: string;
   accent: Accent;
+  image: string;
 };
 
 const SERVICES: Service[] = [
   {
     n: "01",
     name: "Gaming & Simulations",
-    tagline: "Worlds you don't just play — you believe.",
-    body: "We design games and simulations where every mechanic, frame, and decision is engineered for immersion. From mythic open worlds and stylized indie titles to high-fidelity training and enterprise simulators, we treat play as architecture — balancing narrative, systems, art, and performance so your world holds up under a million hours of curiosity.",
-    chips: [
-      "Game design & development",
-      "Interactive simulations",
-      "Training & enterprise sims",
-      "Gameplay systems",
-      "Level & world design",
-      "Cross-platform builds",
-    ],
-    usp: "Playable worlds in weeks, not quarters. Our AI-accelerated pipeline handles procedural world-building, intelligent NPC behavior, and automated playtesting — so we prototype and iterate at a speed conventional studios can't match.",
+    description:
+      "Living, playable worlds for entertainment and training — every mechanic, frame, and decision engineered to be believed.",
     accent: "gold",
+    image: "/images/services/GamingDS.png",
   },
   {
     n: "02",
     name: "AI Visualization",
-    tagline: "Turn ideas and data into images that think.",
-    body: "We transform abstract concepts, raw datasets, and rough ideas into stunning, intelligent visuals — products on the whiteboard, architectural visions, scientific datasets, brand campaigns. Not a single static render, but an explorable space of options, variations, and refinements — each one production-grade.",
-    chips: [
-      "Concept & product visualization",
-      "Architectural & spatial viz",
-      "Data-driven imagery",
-      "Brand & campaign visuals",
-      "Rapid concept exploration",
-      "Style development",
-    ],
-    usp: "From prompt to polished frame, in a fraction of the time. Our AI-driven visualization engine explores hundreds of creative directions before a traditional studio finishes its first draft — more ideas, faster decisions, final visuals that hit the brief on the first round.",
+    description:
+      "Turning ideas and raw data into intelligent, stunning visuals — explorable, production-grade, and fast.",
     accent: "peacock",
+    image: "/images/services/AI%20Visualisation.png",
   },
   {
     n: "03",
     name: "VFX & Animation",
-    tagline: "Maya, mastered.",
-    body: "Visual effects and animation that blur the line between the real and the rendered. From cinematic VFX and dynamic simulations to character animation, motion design, and stylized storytelling, we craft the illusions that move audiences — grounded in solid technique and elevated by cultural storytelling. Every frame is intentional. Every effect serves the story.",
-    chips: [
-      "Cinematic VFX",
-      "Character & creature animation",
-      "Motion graphics",
-      "Compositing & simulation",
-      "Stylized & cultural storytelling",
-      "Post-production",
-    ],
-    usp: "Cinematic craft at production speed. AI supercharges the heavy lifting — rotoscoping, denoising, in-betweening, clean-up, style transfer — so our artists spend their time on creativity and craft, not grunt work.",
-    accent: "gold",
+    description:
+      "Cinematic effects and storytelling that move audiences, frame by intentional frame.",
+    accent: "ink",
+    image: "/images/services/VFX.png",
+  },
+  {
+    n: "04",
+    name: "AR · VR · MR · XR",
+    description:
+      "Immersive experiences across the full spectrum of reality — physical, augmented, and fully virtual.",
+    accent: "spectrum",
+    image: "/images/services/ARVRMRXR.png",
   },
 ];
 
-function ServiceCard({
+const ACCENT: Record<
+  Accent,
+  {
+    ring: string;
+    line: string;
+    label: string;
+    numeral: string;
+    panel: string;
+    glow: string;
+    /** Edge-light color that rims the active card — the warm/cool signature. */
+    edge: string;
+    /** Directional key light washed across the image panel. */
+    sheen: string;
+  }
+> = {
+  gold: {
+    ring: "border-gold/25",
+    line: "bg-gold",
+    label: "text-gold-deep",
+    numeral: "text-gold/45",
+    panel:
+      "bg-[linear-gradient(155deg,var(--gold-light)_0%,var(--gold)_58%,var(--gold-deep)_100%)]",
+    glow: "rgba(200,162,74,0.34)",
+    edge: "rgba(230,205,134,0.55)",
+    sheen: "rgba(255,241,204,0.4)",
+  },
+  peacock: {
+    ring: "border-peacock-blue/25",
+    line: "bg-peacock-blue",
+    label: "text-peacock-blue",
+    numeral: "text-peacock-cyan/40",
+    panel: "bg-peacock-gradient",
+    glow: "rgba(31,182,201,0.34)",
+    edge: "rgba(31,182,201,0.5)",
+    sheen: "rgba(196,244,250,0.42)",
+  },
+  ink: {
+    ring: "border-ink/12",
+    line: "bg-ink",
+    label: "text-ink",
+    numeral: "text-ink/20",
+    panel:
+      "bg-[linear-gradient(155deg,#2c2820_0%,#16140f_60%,#050403_100%)]",
+    glow: "rgba(60,52,38,0.3)",
+    edge: "rgba(230,205,134,0.32)",
+    sheen: "rgba(240,224,180,0.28)",
+  },
+  spectrum: {
+    ring: "border-gold/20",
+    line: "bg-gold",
+    label: "text-gold-deep",
+    numeral: "text-gold/35",
+    panel:
+      "bg-[linear-gradient(145deg,var(--gold-light)_0%,var(--peacock-cyan)_52%,var(--peacock-blue)_100%)]",
+    glow: "rgba(120,150,150,0.32)",
+    edge: "rgba(160,200,205,0.48)",
+    sheen: "rgba(224,240,214,0.4)",
+  },
+};
+
+const SEGMENT_VH = 92;
+// Index i of every array below is the output for DEPTH_DOMAIN[i] — i.e.
+// index 2 is the value at depth 1 (first receded stage), not depth 2.
+//
+// depth -1 = still climbing up onto the deck; 0 = the active face; 1..3 = the
+// receded stages tilting back into the stack. The recede values read as a
+// physical deck settling: each card tips back on its top edge (rotateX),
+// drops elevation (lift/shadow), and drains light (scrim) as it sinks.
+const DEPTH_DOMAIN = [-1, 0, 1, 2, 3];
+const RECEDE_Y = [118, 0, -24, -44, -60];
+const RECEDE_SCALE = [0.93, 1, 0.945, 0.905, 0.875];
+const RECEDE_ROTATEX = [-7, 0, 4.5, 7.5, 9.5];
+const RECEDE_ROTATEZ = [0, 0, 1.3, 2.1, 2.7];
+const RECEDE_OPACITY = [0, 1, 1, 0.97, 0.92];
+const RECEDE_GLOW = [0, 1, 0.5, 0.3, 0.18];
+const RECEDE_SCRIM = [0, 0, 0.34, 0.5, 0.62];
+// Elevation used to drive the shadow hierarchy — the active face floats
+// highest, the climbing card is mid-air, the receded cards press into the deck.
+const RECEDE_LIFT = [0.6, 1, 0.5, 0.3, 0.16];
+
+function useCardDepth(progress: MotionValue<number>, index: number, total: number) {
+  const segLen = 1 / total;
+  const stops: number[] = [];
+  const values: number[] = [];
+
+  if (index === 0) {
+    stops.push(0);
+    values.push(0);
+  } else {
+    const enterStart = Math.max(0, index * segLen - segLen * 0.55);
+    const enterEnd = index * segLen + segLen * 0.08;
+    stops.push(enterStart, enterEnd);
+    values.push(-1, 0);
+  }
+
+  let stage = 0;
+  for (let j = index + 1; j < total; j++) {
+    const recedeStart = Math.max(0, j * segLen - segLen * 0.55);
+    const recedeEnd = j * segLen + segLen * 0.08;
+    stage += 1;
+    stops.push(recedeStart, recedeEnd);
+    values.push(stage - 1, stage);
+  }
+
+  return useTransform(progress, stops, values);
+}
+
+function StackCard({
   service,
   index,
   total,
+  progress,
 }: {
   service: Service;
   index: number;
   total: number;
+  progress: MotionValue<number>;
 }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const { scrollYProgress } = useScroll({
-    target: containerRef,
-    offset: ["start start", "end start"],
-  });
+  const rawDepth = useCardDepth(progress, index, total);
+  // Weightier than a snappy UI spring — a touch of mass gives the deck
+  // believable momentum as each card settles onto the stack.
+  const depth = useSpring(rawDepth, { stiffness: 140, damping: 28, mass: 0.85 });
 
-  const isLast = index === total - 1;
-  const scale = useTransform(scrollYProgress, [0, 1], [1, isLast ? 1 : 0.94]);
-  const opacity = useTransform(
-    scrollYProgress,
-    [0, 1],
-    [1, isLast ? 1 : 0.75]
-  );
+  const y = useTransform(depth, DEPTH_DOMAIN, RECEDE_Y);
+  const scale = useTransform(depth, DEPTH_DOMAIN, RECEDE_SCALE);
+  const rotateX = useTransform(depth, DEPTH_DOMAIN, RECEDE_ROTATEX);
+  const rotateZBase = useTransform(depth, DEPTH_DOMAIN, RECEDE_ROTATEZ);
+  const rotateZ = useTransform(rotateZBase, (v) => (index % 2 === 0 ? -v : v));
+  const opacity = useTransform(depth, DEPTH_DOMAIN, RECEDE_OPACITY);
+  const glowOpacity = useTransform(depth, DEPTH_DOMAIN, RECEDE_GLOW);
+  const scrimOpacity = useTransform(depth, DEPTH_DOMAIN, RECEDE_SCRIM);
+  const lift = useTransform(depth, DEPTH_DOMAIN, RECEDE_LIFT);
+
+  // Layered drop shadow driven by elevation: a tight contact shadow plus a
+  // wide, soft ambient one that swells as the card floats to the front.
   const boxShadow = useTransform(
-    scrollYProgress,
-    [0, 1],
-    [
-      "0 10px 30px -12px rgba(22,20,15,0.08)",
-      isLast
-        ? "0 10px 30px -12px rgba(22,20,15,0.08)"
-        : "0 30px 60px -15px rgba(22,20,15,0.28)",
-    ]
+    lift,
+    (l) =>
+      `0 ${(1 + l * 3).toFixed(1)}px ${(2 + l * 6).toFixed(1)}px rgba(22,20,15,${(
+        0.04 + l * 0.05
+      ).toFixed(3)}), 0 ${(10 + l * 30).toFixed(1)}px ${(30 + l * 60).toFixed(
+        1
+      )}px -${(14 + (1 - l) * 6).toFixed(1)}px rgba(22,20,15,${(0.14 + l * 0.32).toFixed(
+        3
+      )})`
   );
 
-  const isPeacock = service.accent === "peacock";
+  const accent = ACCENT[service.accent];
 
-  return (
-    <div
-      ref={containerRef}
-      className="relative py-6 md:h-[145vh] md:py-0"
-      style={{ zIndex: index }}
+  // --- Restrained pointer-driven light + tilt, only on the active face ---
+  // `activeness` is 1 at depth 0 and falls to 0 as the card leaves the front,
+  // so receded cards silently ignore the pointer without any React state.
+  const activeness = useTransform(depth, [-0.55, 0, 0.55], [0, 1, 0]);
+
+  const pxRaw = useMotionValue(0);
+  const pyRaw = useMotionValue(0);
+  const hoverRaw = useMotionValue(0);
+  const px = useSpring(pxRaw, { stiffness: 120, damping: 20, mass: 0.5 });
+  const py = useSpring(pyRaw, { stiffness: 120, damping: 20, mass: 0.5 });
+  const hover = useSpring(hoverRaw, { stiffness: 180, damping: 26 });
+
+  const tiltX = useTransform([py, activeness] as MotionValue[], ([p, a]: number[]) => -p * 3.2 * a);
+  const tiltY = useTransform([px, activeness] as MotionValue[], ([p, a]: number[]) => p * 3.6 * a);
+  const hoverScale = useTransform(
+    [hover, activeness] as MotionValue[],
+    ([h, a]: number[]) => 1 + h * a * 0.008
+  );
+  const light = useTransform(
+    [px, py] as MotionValue[],
+    ([x, y]: number[]) =>
+      `radial-gradient(38% 46% at ${(50 + x * 55).toFixed(1)}% ${(46 + y * 55).toFixed(
+        1
+      )}%, rgba(255,251,242,0.9), rgba(255,251,242,0) 62%)`
+  );
+  const lightOpacity = useTransform(
+    [hover, activeness] as MotionValue[],
+    ([h, a]: number[]) => h * a * 0.5
+  );
+
+  function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    pxRaw.set((event.clientX - rect.left) / rect.width - 0.5);
+    pyRaw.set((event.clientY - rect.top) / rect.height - 0.5);
+  }
+  function handlePointerEnter() {
+    hoverRaw.set(1);
+  }
+  function handlePointerLeave() {
+    hoverRaw.set(0);
+    pxRaw.set(0);
+    pyRaw.set(0);
+  }
+
+  const card = (
+    <motion.div
+      style={{ y, scale, rotateX, rotate: rotateZ, opacity, zIndex: index, transformPerspective: 2400 }}
+      className="absolute inset-0 flex items-center justify-center px-4 sm:px-6"
     >
-      <div className="md:sticky md:top-[10vh] md:flex md:h-[78vh] md:items-center md:justify-center md:px-6">
+      <motion.div
+        onPointerMove={handlePointerMove}
+        onPointerEnter={handlePointerEnter}
+        onPointerLeave={handlePointerLeave}
+        style={{ rotateX: tiltX, rotateY: tiltY, scale: hoverScale, transformPerspective: 1400 }}
+        className="relative w-full max-w-[1080px]"
+      >
+        {/* Ambient accent bloom — pure radial falloff, no blur filter. */}
         <motion.div
-          style={{ scale, opacity, boxShadow }}
-          className="mx-6 flex w-full max-w-[1100px] flex-col overflow-hidden rounded-3xl border border-gold/30 bg-bg md:mx-0 md:h-full md:flex-row"
+          aria-hidden="true"
+          style={{
+            opacity: glowOpacity,
+            background: `radial-gradient(58% 62% at 50% 40%, ${accent.glow}, transparent 72%)`,
+          }}
+          className="absolute -inset-10 -z-10 rounded-[52px]"
+        />
+
+        <motion.div
+          style={{ boxShadow }}
+          className={`relative flex flex-col overflow-hidden rounded-[28px] border ${accent.ring} md:h-[68vh] md:min-h-[420px] md:max-h-[560px] md:flex-row`}
         >
-          <div className="flex flex-1 flex-col justify-between p-8 sm:p-12 md:overflow-y-auto">
-            <div>
-              <div className="flex items-baseline gap-4">
-                <span className="font-display text-3xl text-gold sm:text-4xl">
+          {/* Base surface — a subtly top-lit parchment, giving the card a
+              believable material rather than a flat fill. */}
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 bg-[linear-gradient(168deg,#ffffff_0%,var(--bg)_46%,#f2ece1_100%)]"
+          />
+
+          {/* Machined edge: hairline inner highlight around the whole rim, a
+              brighter catch along the top, and a soft seated shade at the base. */}
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-[25] rounded-[28px] shadow-[inset_0_1px_0_rgba(255,255,255,0.85),inset_0_0_0_1px_rgba(255,255,255,0.35),inset_0_-28px_46px_-32px_rgba(22,20,15,0.28)]"
+          />
+
+          {/* Accent edge-light — a faint colored rim that ties the card to its
+              discipline without a glowing border. */}
+          <span
+            aria-hidden="true"
+            style={{ boxShadow: `inset 0 0 0 1px ${accent.edge}` }}
+            className="pointer-events-none absolute inset-0 z-[26] rounded-[28px] opacity-40"
+          />
+
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-0 z-[27] h-px bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.95),transparent)]"
+          />
+
+          {/* Cursor-tracked sheen — soft-light so it warms the surface rather
+              than washing it out. Fades in only on the active face. */}
+          <motion.div
+            aria-hidden="true"
+            style={{ background: light, opacity: lightOpacity, mixBlendMode: "soft-light" }}
+            className="pointer-events-none absolute inset-0 z-[28]"
+          />
+
+          {/* Recede scrim — dims the card as it sinks into the deck. */}
+          <motion.div
+            aria-hidden="true"
+            style={{ opacity: scrimOpacity }}
+            className="pointer-events-none absolute inset-0 z-30 bg-ink"
+          />
+
+          <div className="relative z-10 flex flex-1 flex-col justify-between p-8 sm:p-10 md:p-12">
+            <span
+              aria-hidden="true"
+              className={`pointer-events-none absolute -top-3 right-6 select-none font-display text-[7rem] leading-none sm:-top-4 sm:text-[9rem] ${accent.numeral}`}
+            >
+              {service.n}
+            </span>
+
+            <div className="relative">
+              <div className="flex items-center gap-3">
+                <span className={`font-display text-sm tracking-[0.15em] ${accent.label}`}>
                   {service.n}
                 </span>
-                <span className="font-display text-lg text-ink sm:text-xl">
-                  {service.name}
+                <span className="h-px w-8 bg-line" />
+                <span className="font-display text-xs tracking-[0.3em] text-ink-soft">
+                  {String(total).padStart(2, "0")} SERVICES
                 </span>
               </div>
 
-              <p className="mt-5 font-display text-2xl leading-snug text-ink sm:text-3xl">
-                {service.tagline}
-              </p>
+              <h3 className="mt-6 max-w-md font-display text-3xl leading-[1.15] text-ink sm:text-4xl">
+                {service.name}
+              </h3>
 
-              <p className="mt-5 max-w-xl text-sm leading-relaxed text-ink-soft sm:text-base">
-                {service.body}
+              <p className="mt-6 max-w-sm text-base leading-relaxed text-ink-soft sm:text-lg">
+                {service.description}
               </p>
-
-              <div className="mt-6 flex flex-wrap gap-2">
-                {service.chips.map((chip) => (
-                  <span
-                    key={chip}
-                    className="rounded-full border border-gold/40 px-3 py-1 text-xs text-ink-soft"
-                  >
-                    {chip}
-                  </span>
-                ))}
-              </div>
             </div>
 
-            <div
-              className={`mt-8 rounded-2xl border p-5 ${
-                isPeacock
-                  ? "border-peacock-blue/20 bg-[linear-gradient(135deg,rgba(14,140,140,0.10),rgba(33,79,176,0.10))]"
-                  : "border-gold/30 bg-[linear-gradient(135deg,rgba(230,205,134,0.18),rgba(200,162,74,0.10))]"
-              }`}
-            >
-              <span
-                className={isPeacock ? "text-peacock-blue" : "text-gold-deep"}
-              >
-                ✦
+            <div className="relative mt-10 flex items-center gap-3 md:mt-0">
+              <span className={`h-px w-10 ${accent.line}`} />
+              <span className="text-xs tracking-[0.2em] text-ink-soft/80">
+                DWARKA STUDIOS
               </span>
-              <p className="mt-2 text-sm leading-relaxed text-ink">
-                {service.usp}
-              </p>
             </div>
           </div>
 
           <div
-            className={`flex min-h-[180px] flex-1 items-center justify-center md:max-w-[34%] ${
-              isPeacock
-                ? "bg-peacock-gradient"
-                : "bg-[linear-gradient(135deg,var(--gold-light),var(--gold))]"
-            }`}
+            className={`relative z-10 min-h-[220px] flex-1 overflow-hidden md:min-h-0 md:max-w-[38%] ${accent.panel}`}
           >
-            <span className="font-display text-lg tracking-wide text-white sm:text-xl">
-              {service.name}
-            </span>
+            <Image
+              src={service.image}
+              alt={service.name}
+              fill
+              sizes="(min-width: 768px) 38vw, 100vw"
+              className="object-cover"
+            />
+            {/* Accent tint — lighter than before so the artwork reads through. */}
+            <div
+              aria-hidden="true"
+              className={`absolute inset-0 mix-blend-multiply opacity-40 ${accent.panel}`}
+            />
+            {/* Directional key light raking across the panel + a grounding
+                vignette, for depth and richer material. */}
+            <div
+              aria-hidden="true"
+              style={{
+                background: `linear-gradient(118deg, ${accent.sheen} 0%, transparent 42%), linear-gradient(300deg, rgba(0,0,0,0.42) 0%, transparent 46%)`,
+              }}
+              className="absolute inset-0"
+            />
+            {/* Seam between text and image — a lit edge that seats the panel. */}
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-y-0 left-0 hidden w-px bg-[linear-gradient(180deg,transparent,rgba(255,255,255,0.55),transparent)] md:block"
+            />
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-y-0 left-0 hidden w-16 shadow-[inset_18px_0_34px_-26px_rgba(0,0,0,0.6)] md:block"
+            />
           </div>
         </motion.div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
+  );
+
+  if (index === 0) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 30, scale: 0.96, rotateX: -6 }}
+        whileInView={{ opacity: 1, y: 0, scale: 1, rotateX: 0 }}
+        viewport={{ once: true, margin: "-15%" }}
+        transition={{ duration: 1, ease: EASE }}
+        className="absolute inset-0"
+        style={{ zIndex: index, transformPerspective: 2400 }}
+      >
+        {card}
+      </motion.div>
+    );
+  }
+
+  return card;
+}
+
+/** Slim per-scene progress rail beneath the heading — communicates that the
+ *  scroll is stepping through discrete scenes, not just translating cards. */
+function ProgressTick({
+  index,
+  total,
+  progress,
+}: {
+  index: number;
+  total: number;
+  progress: MotionValue<number>;
+}) {
+  const seg = 1 / total;
+  const start = index * seg;
+  const end = (index + 1) * seg;
+  // Ranges must stay strictly increasing inside [0, 1] for the first/last tick.
+  const eps = 0.001;
+  const a = Math.max(0, start - 0.02);
+  const b = Math.max(a + eps, start);
+  const c = Math.max(b + eps, end - 0.01);
+  const d = Math.min(1, Math.max(c + eps, end + 0.02));
+  // Auto-clamped at the domain ends, so each bar fills only during its scene.
+  const fill = useTransform(progress, [start, Math.max(start + eps, end)], [0, 1]);
+  const dim = useTransform(progress, [a, b, c, d], [0.35, 1, 1, 0.5]);
+
+  return (
+    <motion.span
+      style={{ opacity: dim }}
+      className="relative h-[3px] w-10 overflow-hidden rounded-full bg-ink/10"
+    >
+      <motion.span
+        style={{ scaleX: fill }}
+        className="absolute inset-0 origin-left rounded-full bg-[linear-gradient(90deg,var(--gold-deep),var(--gold),var(--gold-light))]"
+      />
+    </motion.span>
   );
 }
 
 export function ServicesStack() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    target: containerRef,
+    offset: ["start start", "end end"],
+  });
+
   return (
-    <section id="services" className="bg-bg pt-24">
-      <div className="mx-auto max-w-5xl px-6 text-center">
-        <p className="font-display text-xs tracking-[0.3em] text-gold">
-          SERVICES
-        </p>
-        <h2 className="mt-6 font-display text-3xl text-ink sm:text-4xl">
-          Three disciplines. One studio.
-        </h2>
+    <section
+      id="services"
+      className="relative bg-bg-warm"
+      data-navbar-bg="var(--bg-warm)"
+      data-navbar-fg="var(--ink)"
+    >
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-px"
+        style={{
+          background:
+            "linear-gradient(90deg, transparent, var(--gold-light), transparent)",
+        }}
+      />
+
+      {/* Desktop / tablet — pinned depth-stacked deck */}
+      <div
+        ref={containerRef}
+        className="relative hidden md:block"
+        style={{ height: `${SEGMENT_VH * SERVICES.length}vh` }}
+      >
+        <div className="sticky top-0 flex h-screen flex-col overflow-hidden">
+          <div className="mx-auto max-w-3xl px-6 pt-16 text-center">
+            <p className="font-display text-xs tracking-[0.3em] text-gold">
+              SERVICES
+            </p>
+            <h2 className="mt-4 font-display text-3xl text-ink sm:text-4xl">
+              Four disciplines. One studio.
+            </h2>
+            <div className="mt-7 flex items-center justify-center gap-2.5">
+              {SERVICES.map((service, index) => (
+                <ProgressTick
+                  key={service.n}
+                  index={index}
+                  total={SERVICES.length}
+                  progress={scrollYProgress}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Perspective stage — gives the receded cards real depth. */}
+          <div
+            className="relative mt-8 flex-1"
+            style={{ perspective: "2400px", perspectiveOrigin: "50% 44%" }}
+          >
+            {SERVICES.map((service, index) => (
+              <StackCard
+                key={service.n}
+                service={service}
+                index={index}
+                total={SERVICES.length}
+                progress={scrollYProgress}
+              />
+            ))}
+          </div>
+        </div>
       </div>
 
-      <div className="mt-16">
-        {SERVICES.map((service, index) => (
-          <ServiceCard
-            key={service.n}
-            service={service}
-            index={index}
-            total={SERVICES.length}
-          />
-        ))}
+      {/* Mobile — simple reveal list, no scroll-jacking */}
+      <div className="px-6 py-20 md:hidden">
+        <div className="mx-auto max-w-md text-center">
+          <p className="font-display text-xs tracking-[0.3em] text-gold">
+            SERVICES
+          </p>
+          <h2 className="mt-4 font-display text-3xl text-ink">
+            Four disciplines. One studio.
+          </h2>
+        </div>
+
+        <div className="mt-12 flex flex-col gap-6">
+          {SERVICES.map((service) => {
+            const accent = ACCENT[service.accent];
+            return (
+              <motion.div
+                key={service.n}
+                initial={{ opacity: 0, y: 24 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, margin: "-10%" }}
+                transition={{ duration: 0.7, ease: EASE }}
+                className={`relative overflow-hidden rounded-[24px] border ${accent.ring} bg-[linear-gradient(168deg,#ffffff_0%,var(--bg)_60%,#f2ece1_100%)] shadow-[0_1px_0_rgba(255,255,255,0.8),0_24px_46px_-26px_rgba(22,20,15,0.34)]`}
+              >
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 z-20 rounded-[24px] shadow-[inset_0_1px_0_rgba(255,255,255,0.8),inset_0_0_0_1px_rgba(255,255,255,0.3)]"
+                />
+                <div className={`relative h-36 w-full ${accent.panel}`}>
+                  <Image
+                    src={service.image}
+                    alt={service.name}
+                    fill
+                    sizes="100vw"
+                    className="object-cover"
+                  />
+                  <div
+                    aria-hidden="true"
+                    className={`absolute inset-0 mix-blend-multiply opacity-40 ${accent.panel}`}
+                  />
+                  <div
+                    aria-hidden="true"
+                    style={{
+                      background: `linear-gradient(118deg, ${accent.sheen} 0%, transparent 44%), linear-gradient(300deg, rgba(0,0,0,0.4) 0%, transparent 48%)`,
+                    }}
+                    className="absolute inset-0"
+                  />
+                </div>
+                <div className="relative p-6">
+                  <div className="flex items-center gap-3">
+                    <span className={`font-display text-sm tracking-[0.15em] ${accent.label}`}>
+                      {service.n}
+                    </span>
+                    <span className="h-px w-8 bg-line" />
+                  </div>
+                  <h3 className="mt-4 font-display text-2xl text-ink">
+                    {service.name}
+                  </h3>
+                  <p className="mt-3 text-sm leading-relaxed text-ink-soft">
+                    {service.description}
+                  </p>
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
