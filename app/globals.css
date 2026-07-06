@@ -5,6 +5,7 @@
   --bg-warm: #faf7f1;
   --ink: #16140f;
   --ink-soft: #5c574c;
+  --ink-deep: #050403;
   --line: #ece6da;
 
   --gold: #c8a24a;
@@ -19,6 +20,12 @@
   --parchment: #f6f1e6;
   --parchment-rgb: 246 241 230;
   --parchment-ink: #2c2820;
+
+  /* Navbar theme — kept updated by useNavbarSectionColor() to match
+     whichever section currently occupies the most of the viewport.
+     Defaults to the hero's colors since that's what's on screen at load. */
+  --navbar-bg: var(--ink);
+  --navbar-fg: var(--parchment);
 }
 
 @theme inline {
@@ -81,6 +88,63 @@
   html {
     scroll-behavior: auto;
   }
+
+  .stack-spin-slow,
+  .stack-spin-slower,
+  .stack-pulse,
+  .stack-drift {
+    animation: none !important;
+  }
+}
+
+/* Services stack — ambient motion for the procedural card visuals. */
+
+@keyframes stack-spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes stack-spin-slower {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+@keyframes stack-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes stack-drift {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.stack-spin-slow {
+  animation: stack-spin-slow 34s linear infinite;
+}
+
+.stack-spin-slower {
+  animation: stack-spin-slower 46s linear infinite;
+}
+
+.stack-pulse {
+  animation: stack-pulse 3.2s ease-in-out infinite;
+}
+
+.stack-drift {
+  animation: stack-drift 5.5s ease-in-out infinite;
 }
 
 /* Hero parchment overlay — procedural handmade-paper texture, no PNG. */
