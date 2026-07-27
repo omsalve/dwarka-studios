@@ -10,12 +10,19 @@
    mutated outside effects, which doesn't hold for r3f's per-frame mutation
    model and produces false positives throughout this file. */
 
-import { useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import { AnimatePresence, motion } from "motion/react";
 import * as THREE from "three";
+import { useIntro } from "@/components/GateIntro/IntroContext";
 import { EASE } from "@/lib/motion";
+import {
+  BRIDGE,
+  easeOutCubic,
+  prefersReducedMotion,
+  smoothstep,
+} from "@/lib/heroBridge";
 
 /* ----------------------------------------------------------------------- */
 /* Shared time source                                                      */
@@ -105,6 +112,42 @@ const NOISE_GLSL = /* glsl */ `
 `;
 
 /* ----------------------------------------------------------------------- */
+/* Peacock iridescence                                                     */
+/*                                                                         */
+/* A smooth, cyclic sweep through the brand's own peacock palette — emerald */
+/* → teal → turquoise → sapphire → violet, with a warm-gold accent so the   */
+/* wheel never lands on a cold, RGB-looking primary. Each stop is a muted,  */
+/* slightly-desaturated hue (not a neon primary), and neighbours are joined */
+/* with a smoothstep so there are no hard bands. Callers add their own warm  */
+/* bias and keep intensity low, so this reads as light refracting through an */
+/* exotic material rather than a rainbow painted on top of it.              */
+/* ----------------------------------------------------------------------- */
+
+const IRIDESCENCE_GLSL = /* glsl */ `
+  vec3 peacockHue(float t) {
+    vec3 emerald   = vec3(0.05, 0.40, 0.28);
+    vec3 teal      = vec3(0.03, 0.52, 0.52);
+    vec3 turquoise = vec3(0.10, 0.68, 0.74);
+    vec3 sapphire  = vec3(0.11, 0.28, 0.66);
+    vec3 violet    = vec3(0.34, 0.22, 0.52);
+    vec3 gold      = vec3(0.72, 0.56, 0.28);
+
+    float x = fract(t) * 6.0;
+    float i = floor(x);
+    float f = smoothstep(0.0, 1.0, fract(x));
+
+    vec3 c;
+    if      (i < 0.5) c = mix(emerald, teal, f);
+    else if (i < 1.5) c = mix(teal, turquoise, f);
+    else if (i < 2.5) c = mix(turquoise, sapphire, f);
+    else if (i < 3.5) c = mix(sapphire, violet, f);
+    else if (i < 4.5) c = mix(violet, gold, f);
+    else              c = mix(gold, emerald, f);
+    return c;
+  }
+`;
+
+/* ----------------------------------------------------------------------- */
 /* Before orb: rough charcoal stone with subtle inner amber + cracks       */
 /* ----------------------------------------------------------------------- */
 
@@ -151,29 +194,54 @@ const beforeFragmentShader = /* glsl */ `
 
   void main() {
     vec3 viewDir = normalize(cameraPosition - vPos);
-    float fres = pow(1.0 - max(dot(vNormal, viewDir), 0.0), 3.0);
+    float NdotV = max(dot(vNormal, viewDir), 0.0);
+    float fres = pow(1.0 - NdotV, 3.0);
 
-    float rough = fbm(vPos * 4.0 + uTime * 0.02) * 0.5 + 0.5;
-    vec3 stone = mix(uBase * 0.75, uBase * 1.3, rough);
+    // Weathered, pitted surface: broad roughness patches plus fine pitting so
+    // the sphere reads as a raw cast-bronze / gold-ore body — an unfinished
+    // masterpiece — rather than a smooth matte blob.
+    float rough = fbm(vPos * 4.5 + uTime * 0.02) * 0.5 + 0.5;
+    float pit = smoothstep(0.30, 0.62, fbm(vPos * 9.0 + 4.0));
+    vec3 metal = mix(uBase * 0.6, uBase * 1.6, rough);
+    metal *= 1.0 - pit * 0.45;
+    // A muted gold undertone bled through the whole raw body — this is the
+    // "unrealized potential": the same gold the After orb has fully forged,
+    // still dormant and oxidised here rather than a dead grey stone.
+    metal = mix(metal, uAmber * 0.7, 0.16);
 
-    float crackField = fbm(vPos * 6.0 - uTime * 0.01);
-    float cracks = smoothstep(0.92, 1.0, abs(crackField)) * uCrack;
+    // Shared warm key light — the SAME direction the After orb is lit from —
+    // so the two orbs read as one object in one room. A metallic diffuse
+    // gradient plus a broad, rough specular makes the material catch light
+    // like unpolished bronze instead of sitting flat.
+    vec3 L = normalize(vec3(0.45, 0.55, 0.75));
+    vec3 H = normalize(L + viewDir);
+    float diff = max(dot(vNormal, L), 0.0);
+    float spec = pow(max(dot(vNormal, H), 0.0), 16.0) * (0.35 + rough * 0.5);
+    vec3 color = metal * (0.42 + diff * 0.75);
 
-    float innerGlow = (0.3 + uGlow * 0.8) * (0.4 + 0.6 * (1.0 - rough));
-    vec3 amberGlow = uAmber * innerGlow * (0.3 + uHover * 0.7);
+    // Brighter veins of gold where the ore runs richest; they wake further as
+    // the orb is selected.
+    float veinField = fbm(vPos * 4.0 - uTime * 0.012);
+    float veins = smoothstep(0.84, 1.0, abs(veinField));
+    color += uAmber * veins * (0.5 + uHover * 0.5 + uGlow * 1.0);
+    color += uAmber * uGlow * 0.35 * (1.0 - rough);
 
-    vec3 color = stone + amberGlow * 0.5 + cracks * uAmber * 1.4;
-    color += fres * uAmber * (0.1 + uHover * 0.1 + uGlow * 0.3);
+    // Warm metallic highlight + warm fresnel rim.
+    color += uAmber * spec * 0.7;
+    color += fres * uAmber * (0.14 + uHover * 0.12 + uGlow * 0.3);
 
-    // Distant starlight gives the orb a believable reason to be visibly lit
-    // even at idle, and flares brighter while the transformation runs.
-    color += vec3(0.85, 0.82, 0.78) * uStarlight * 0.22;
+    // Warm-neutral fill bounce from the opposite side reads as a second light
+    // source without the cold blue cast that was draining the orb's warmth —
+    // and carries no time term, so it can't reintroduce the rim flicker these
+    // shaders were tuned to avoid.
+    float fillWrap = max(dot(vNormal, normalize(vec3(-0.5, -0.15, 0.35))), 0.0);
+    color += vec3(0.52, 0.47, 0.42) * fillWrap * 0.1;
 
-    // A higher floor keeps the orb visibly matte-charcoal even on faces
-    // angled away from the key light, instead of dropping toward black
-    // and disappearing into the near-black backdrop.
-    float lightWrap = max(dot(vNormal, normalize(vec3(0.4, 0.6, 0.8))), 0.0);
-    color *= 0.85 + lightWrap * 0.45 + uStarlight * 0.3;
+    // Warm ambient from the surrounding scene keeps the orb believably lit at
+    // idle instead of dropping toward black against the bronze backdrop.
+    color += vec3(0.96, 0.84, 0.66) * uStarlight * 0.24;
+    color *= 0.92 + uStarlight * 0.2;
+
     color *= 1.0 - uDim * 0.5;
 
     gl_FragColor = vec4(color, 1.0);
@@ -195,6 +263,7 @@ function BeforeOrb({
   onClick,
   timeRef,
   starlight,
+  introRef,
 }: {
   position: [number, number, number];
   hovered: boolean;
@@ -204,6 +273,7 @@ function BeforeOrb({
   onClick: () => void;
   timeRef: React.RefObject<THREE.Timer>;
   starlight: React.RefObject<number>;
+  introRef: React.RefObject<number>;
 }) {
   const matRef = useRef<THREE.ShaderMaterial>(null);
   const groupRef = useRef<THREE.Group>(null);
@@ -220,8 +290,11 @@ function BeforeOrb({
       uGlow: { value: 0 },
       uStarlight: { value: 0.3 },
       uDim: { value: 0 },
-      uBase: { value: new THREE.Color("#4a4438") },
-      uAmber: { value: new THREE.Color("#c8853a") },
+      // Weathered antique-bronze body, veined with dormant antique gold — the
+      // same gold the After orb has fully forged, so they read as two stages
+      // of one object rather than two unrelated assets.
+      uBase: { value: new THREE.Color("#4a3726") },
+      uAmber: { value: new THREE.Color("#b98a44") },
     }),
     []
   );
@@ -251,19 +324,27 @@ function BeforeOrb({
     uniforms.uWobble.value = THREE.MathUtils.damp(uniforms.uWobble.value, wobbleTarget, 2, delta);
     uniforms.uDim.value = THREE.MathUtils.damp(uniforms.uDim.value, dimTarget, 2.5, delta);
 
+    // Condense out of the parting light: the Before orb resolves first
+    // (it's the "raw" state the sequence starts from). reveal 0 → a point,
+    // 1 → full size. An emergence bell adds a brief forging flare mid-arrival.
+    const intro = introRef.current ?? 1;
+    const reveal = easeOutCubic(THREE.MathUtils.clamp(intro / 0.82, 0, 1));
+    const emerge = reveal * (1 - reveal) * 4;
+
     if (groupRef.current) {
       groupRef.current.rotation.y += delta * (0.06 + Math.sin(t * 0.3) * 0.02);
       groupRef.current.rotation.x = Math.sin(t * 0.25) * 0.04;
       groupRef.current.position.y =
         position[1] + Math.sin(t * 0.5) * 0.06 + uniforms.uLift.value;
 
-      const scaleTarget = selected ? SELECT_SCALE : 1;
+      const scaleTarget = (selected ? SELECT_SCALE : 1) * reveal;
       const nextScale = THREE.MathUtils.damp(groupRef.current.scale.x, scaleTarget, 1.8, delta);
       groupRef.current.scale.setScalar(nextScale);
     }
 
     if (glowLightRef.current) {
-      glowLightRef.current.intensity = uniforms.uGlow.value * 2.5 * (1 - uniforms.uDim.value * 0.6);
+      glowLightRef.current.intensity =
+        (uniforms.uGlow.value * 2.5 + emerge * 1.6) * (1 - uniforms.uDim.value * 0.6);
     }
   });
 
@@ -283,7 +364,7 @@ function BeforeOrb({
           onClick();
         }}
       >
-        <icosahedronGeometry args={[0.78, 5]} />
+        <icosahedronGeometry args={[0.78, 7]} />
         <shaderMaterial
           ref={matRef}
           vertexShader={beforeVertexShader}
@@ -311,13 +392,15 @@ const afterFragmentShader = /* glsl */ `
   varying vec3 vPos;
 
   ${NOISE_GLSL}
+  ${IRIDESCENCE_GLSL}
 
   void main() {
     vec3 viewDir = normalize(cameraPosition - vPos);
+    float NdotV = max(dot(vNormal, viewDir), 0.0);
     // A soft, low exponent keeps the rim brightening gradual across the
     // surface instead of concentrated in a thin band exactly at the
     // silhouette, where it would be most sensitive to per-frame change.
-    float fres = pow(1.0 - max(dot(vNormal, viewDir), 0.0), 1.6);
+    float fres = pow(1.0 - NdotV, 1.6);
 
     // Low spatial frequency so a slow rotation can't sweep wildly different
     // noise values through the same screen pixel from frame to frame —
@@ -326,10 +409,37 @@ const afterFragmentShader = /* glsl */ `
     float energy = fbm(vPos * 0.9 + uTime * 0.08) * 0.35 + 0.5;
     vec3 core = mix(uGoldDeep, uGold, energy);
 
-    float breathe = 0.95 + 0.08 * sin(uTime * 0.5);
-    vec3 color = core * breathe * 1.2;
-    color += uGold * fres * (0.55 + uHover * 0.35 + uBoost * 0.8);
-    color += uGold * 0.18 * (1.0 + uBoost);
+    // Shared warm key light — the SAME direction as the Before orb — gives the
+    // forged sphere real form (a diffuse gradient) and a tight, polished-metal
+    // specular. Shaping the emissive core with that gradient is what keeps it
+    // reading as refined gold rather than a uniformly bright glowing ball.
+    vec3 L = normalize(vec3(0.45, 0.55, 0.75));
+    vec3 H = normalize(L + viewDir);
+    float diff = max(dot(vNormal, L), 0.0);
+    float spec = pow(max(dot(vNormal, H), 0.0), 55.0);
+
+    float breathe = 0.95 + 0.07 * sin(uTime * 0.5);
+    vec3 color = core * (0.6 + diff * 0.55) * breathe;
+    color += uGold * fres * (0.5 + uHover * 0.35 + uBoost * 0.8);
+    color += vec3(1.0, 0.95, 0.82) * spec * (0.7 + uBoost * 0.6);
+    color += uGold * 0.16 * (1.0 + uBoost);
+
+    // Thin-film iridescence at the grazing rim only — the polished gold shell
+    // refracting light into peacock hues right at its edge, the same family of
+    // colour the surrounding aura carries. The hue is driven by view angle
+    // (like real thin-film interference) with a slow drift, then pulled halfway
+    // back toward gold so the body stays unmistakably a gold orb.
+    float rim = pow(fres, 2.2);
+    vec3 irid = peacockHue(NdotV * 0.6 + uTime * 0.015);
+    irid = mix(irid, uGold, 0.5);
+    color += irid * rim * (0.22 + uHover * 0.18 + uBoost * 0.35);
+
+    // Cool fill bounce from a fixed direction opposite the shell's warm
+    // glow — reads as a second light source so the shell isn't lit from
+    // fresnel alone in every direction at once.
+    float fillWrap = max(dot(vNormal, normalize(vec3(-0.4, -0.3, 0.5))), 0.0);
+    color += vec3(0.5, 0.55, 0.65) * fillWrap * 0.1;
+
     color *= 1.0 - uDim * 0.5;
 
     gl_FragColor = vec4(color, 1.0);
@@ -348,133 +458,158 @@ const afterVertexShader = /* glsl */ `
   }
 `;
 
-const bandVertexShader = /* glsl */ `
-  varying vec2 vUv;
-  void main() {
-    vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
-
-/* Bands are wide and soft on purpose: a razor-thin bright sliver sweeping a
-   low-poly torus is exactly the kind of high-frequency detail that strobes
-   under bloom + a moving camera, independent of any timing issue. */
-const bandFragmentShader = /* glsl */ `
-  uniform float uTime;
-  uniform float uSpeed;
-  uniform float uBoost;
-  uniform float uDim;
-  uniform vec3 uColor;
-  varying vec2 vUv;
-  void main() {
-    float flow = fract(vUv.x * 2.0 - uTime * uSpeed);
-    float band = smoothstep(0.0, 0.32, flow) * smoothstep(0.62, 0.32, flow);
-    float edge = smoothstep(0.0, 0.2, vUv.y) * smoothstep(1.0, 0.8, vUv.y);
-    float alpha = band * edge * (0.4 + uBoost * 0.4) * (1.0 - uDim * 0.6);
-    gl_FragColor = vec4(uColor * (0.9 + uBoost * 0.5), alpha);
-  }
-`;
-
-function OrbitingParticles({
-  radius,
+/* Star-dust aura for the After orb — a medium-density cloud of peacock-hued
+   cosmic dust and faint sparkling stars swirling in a calm orbital flow. Every
+   mote's motion is computed on the GPU from per-particle attributes + uTime (no
+   per-frame JS loop over the buffer), so it stays cheap: an analytic orbit plus
+   gentle turbulence, with each mote drifting slowly outward over its lifetime
+   and fading at both ends. No rings, no bands, no solid halo — just drifting
+   light that wraps the gold orb (dust behind it is naturally occluded by the
+   orb's depth, dust in front adds over it). */
+function StarDustAura({
   count,
-  color,
-  boost,
+  boostUniform,
+  dimUniform,
   timeRef,
 }: {
-  radius: number;
   count: number;
-  color: string;
-  boost: React.RefObject<number>;
+  boostUniform: { value: number };
+  dimUniform: { value: number };
   timeRef: React.RefObject<THREE.Timer>;
 }) {
-  const pointsRef = useRef<THREE.Points>(null);
-  const matRef = useRef<THREE.ShaderMaterial>(null);
-
-  const { positions, speeds, offsets } = useMemo(() => {
+  const { positions, radii, heights, angles, speeds, hues, stars, seeds } = useMemo(() => {
     const positions = new Float32Array(count * 3);
+    const radii = new Float32Array(count);
+    const heights = new Float32Array(count);
+    const angles = new Float32Array(count);
     const speeds = new Float32Array(count);
-    const offsets = new Float32Array(count);
+    const hues = new Float32Array(count);
+    const stars = new Float32Array(count);
+    const seeds = new Float32Array(count);
     for (let i = 0; i < count; i++) {
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(2 * Math.random() - 1);
-      const r = radius * (0.85 + Math.random() * 0.3);
-      positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
-      positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta) * 0.6;
-      positions[i * 3 + 2] = r * Math.cos(phi);
-      speeds[i] = 0.1 + Math.random() * 0.15;
-      offsets[i] = Math.random() * Math.PI * 2;
+      // Denser toward the orb, thinning outward; flattened into an oblate cloud
+      // so it reads as an orbital swirl rather than a uniform sphere.
+      const r = 0.9 + Math.pow(Math.random(), 1.7) * 1.15;
+      const ang = Math.random() * Math.PI * 2;
+      const h = (Math.random() - 0.5) * 1.4 * (1 - ((r - 0.9) / 1.15) * 0.45);
+      radii[i] = r;
+      angles[i] = ang;
+      heights[i] = h;
+      speeds[i] = 0.12 + Math.random() * 0.22;
+      hues[i] = Math.random();
+      stars[i] = Math.random() < 0.22 ? 1 : 0;
+      seeds[i] = Math.random();
+      positions[i * 3] = Math.cos(ang) * r;
+      positions[i * 3 + 1] = h;
+      positions[i * 3 + 2] = Math.sin(ang) * r;
     }
-    return { positions, speeds, offsets };
-  }, [count, radius]);
+    return { positions, radii, heights, angles, speeds, hues, stars, seeds };
+  }, [count]);
 
-  const basePositions = useRef(positions.slice());
-
-  const particleUniforms = useMemo(
-    () => ({
-      uTime: { value: 0 },
-      uColor: { value: new THREE.Color(color) },
-      uBoost: { value: 0 },
-    }),
-    [color]
+  const uniforms = useMemo(
+    () => ({ uTime: { value: 0 }, uBoost: { value: 0 }, uDim: { value: 0 } }),
+    []
   );
 
   useFrame(() => {
-    const t = timeRef.current.getElapsed();
-    const delta = timeRef.current.getDelta();
-
-    particleUniforms.uTime.value = t;
-    particleUniforms.uBoost.value = THREE.MathUtils.damp(
-      particleUniforms.uBoost.value,
-      boost.current ?? 0,
-      3,
-      delta
-    );
-    if (pointsRef.current) {
-      const geom = pointsRef.current.geometry;
-      const posAttr = geom.attributes.position as THREE.BufferAttribute;
-      for (let i = 0; i < count; i++) {
-        const bx = basePositions.current[i * 3];
-        const by = basePositions.current[i * 3 + 1];
-        const bz = basePositions.current[i * 3 + 2];
-        const ang = t * speeds[i] + offsets[i];
-        const cos = Math.cos(ang);
-        const sin = Math.sin(ang);
-        posAttr.array[i * 3] = bx * cos - bz * sin;
-        posAttr.array[i * 3 + 1] = by + Math.sin(t * 0.6 + offsets[i]) * 0.03;
-        posAttr.array[i * 3 + 2] = bx * sin + bz * cos;
-      }
-      posAttr.needsUpdate = true;
-    }
+    uniforms.uTime.value = timeRef.current.getElapsed();
+    uniforms.uBoost.value = boostUniform.value;
+    uniforms.uDim.value = dimUniform.value;
   });
 
   return (
-    <points ref={pointsRef} renderOrder={3}>
+    <points renderOrder={3} frustumCulled={false}>
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        <bufferAttribute attach="attributes-aRadius" args={[radii, 1]} />
+        <bufferAttribute attach="attributes-aHeight" args={[heights, 1]} />
+        <bufferAttribute attach="attributes-aAngle" args={[angles, 1]} />
+        <bufferAttribute attach="attributes-aSpeed" args={[speeds, 1]} />
+        <bufferAttribute attach="attributes-aHue" args={[hues, 1]} />
+        <bufferAttribute attach="attributes-aStar" args={[stars, 1]} />
+        <bufferAttribute attach="attributes-aSeed" args={[seeds, 1]} />
       </bufferGeometry>
       <shaderMaterial
-        ref={matRef}
         transparent
         depthWrite={false}
         blending={THREE.AdditiveBlending}
-        uniforms={particleUniforms}
+        uniforms={uniforms}
         vertexShader={`
           uniform float uTime;
+          uniform float uBoost;
+          attribute float aRadius;
+          attribute float aHeight;
+          attribute float aAngle;
+          attribute float aSpeed;
+          attribute float aHue;
+          attribute float aStar;
+          attribute float aSeed;
+          varying float vHue;
+          varying float vStar;
+          varying float vFade;
+          varying float vSeed;
           void main() {
-            vec4 mv = modelViewMatrix * vec4(position, 1.0);
-            gl_PointSize = (3.2 / -mv.z) * 4.0;
+            // Lifetime loop: each mote drifts slowly outward, then recycles.
+            float lifeSpeed = 0.05 + aSeed * 0.05;
+            float life = fract(aSeed + uTime * lifeSpeed);
+            float rad = aRadius + life * 0.45 + uBoost * 0.15;
+
+            // Calm orbital swirl + a little turbulence (cosmic wind).
+            float ang = aAngle + uTime * aSpeed;
+            float turbX = sin(uTime * 0.35 + aSeed * 6.2831) * 0.06;
+            float turbZ = cos(uTime * 0.28 + aRadius * 3.0 + aSeed * 4.0) * 0.06;
+            float turbY = sin(uTime * 0.22 + aSeed * 6.2831) * 0.05;
+
+            vec3 pos;
+            pos.x = cos(ang) * rad + turbX;
+            pos.z = sin(ang) * rad + turbZ;
+            pos.y = aHeight + turbY + sin(uTime * 0.2 + aSeed * 3.0) * 0.04;
+
+            // Fade in near the inner edge, fade out as it drifts away.
+            vFade = smoothstep(0.0, 0.12, life) * smoothstep(1.0, 0.55, life);
+            vHue = aHue;
+            vStar = aStar;
+            vSeed = aSeed;
+
+            vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+            float base = mix(3.4, 6.8, aStar);
+            gl_PointSize = base * (1.0 + uBoost * 0.5) * (4.0 / -mv.z);
             gl_Position = projectionMatrix * mv;
           }
         `}
         fragmentShader={`
-          uniform vec3 uColor;
+          uniform float uTime;
           uniform float uBoost;
+          uniform float uDim;
+          varying float vHue;
+          varying float vStar;
+          varying float vFade;
+          varying float vSeed;
+
+          ${IRIDESCENCE_GLSL}
+
           void main() {
             vec2 c = gl_PointCoord - 0.5;
-            float d = length(c);
-            float alpha = smoothstep(0.5, 0.0, d);
-            gl_FragColor = vec4(uColor * (1.3 + uBoost), alpha * alpha * (0.7 + uBoost * 0.6));
+            float dd = length(c);
+            float soft = smoothstep(0.5, 0.0, dd);
+            float core = smoothstep(0.16, 0.0, dd);
+            // Dust motes are soft; stars keep a brighter, tighter core.
+            float shape = soft * soft + core * vStar * 0.9;
+
+            // Peacock dust — its saturation is boosted so the cooler hues
+            // survive being added over the warm gold field, then stars pull
+            // toward warm gold-white so they read as sparkles rather than hue.
+            vec3 col = peacockHue(vHue + uTime * 0.02);
+            float lum = dot(col, vec3(0.299, 0.587, 0.114));
+            col = mix(vec3(lum), col, 1.35);
+            col = mix(col, vec3(1.0, 0.94, 0.82), vStar * 0.6);
+
+            // Slow twinkle for the stars only.
+            float tw = 0.7 + 0.3 * sin(uTime * 2.4 + vSeed * 40.0);
+            float bright = (1.0 + uBoost * 0.8) * mix(1.0, tw, vStar);
+
+            float alpha = shape * vFade * bright * (1.0 - uDim * 0.6);
+            gl_FragColor = vec4(col * bright, alpha);
           }
         `}
       />
@@ -491,6 +626,7 @@ function AfterOrb({
   onClick,
   arrivalBoost,
   timeRef,
+  introRef,
 }: {
   position: [number, number, number];
   hovered: boolean;
@@ -500,6 +636,7 @@ function AfterOrb({
   onClick: () => void;
   arrivalBoost: React.RefObject<number>;
   timeRef: React.RefObject<THREE.Timer>;
+  introRef: React.RefObject<number>;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const glowLightRef = useRef<THREE.PointLight>(null);
@@ -516,51 +653,26 @@ function AfterOrb({
     []
   );
 
-  const band1 = useMemo(
-    () => ({
-      uTime: { value: 0 },
-      uSpeed: { value: 0.16 },
-      uBoost: { value: 0 },
-      uDim: { value: 0 },
-      uColor: { value: new THREE.Color("#ffd479") },
-    }),
-    []
-  );
-  const band2 = useMemo(
-    () => ({
-      uTime: { value: 0 },
-      uSpeed: { value: -0.11 },
-      uBoost: { value: 0 },
-      uDim: { value: 0 },
-      uColor: { value: new THREE.Color("#e9b85a") },
-    }),
-    []
-  );
-
   useFrame(() => {
     const t = timeRef.current.getElapsed();
     const delta = timeRef.current.getDelta();
 
     coreUniforms.uTime.value = t;
-    band1.uTime.value = t;
-    band2.uTime.value = t;
 
     const targetHover = hovered && !selected ? 1 : 0;
     coreUniforms.uHover.value = THREE.MathUtils.damp(coreUniforms.uHover.value, targetHover, 4, delta);
 
-    const speedTarget = hovered ? 0.28 : 0.16;
-    band1.uSpeed.value = THREE.MathUtils.damp(band1.uSpeed.value, speedTarget, 3, delta);
-    band2.uSpeed.value = THREE.MathUtils.damp(band2.uSpeed.value, -speedTarget * 0.7, 3, delta);
-
     const boostTarget = (hovered && !selected ? 0.4 : 0) + (selected ? 0.6 : 0) + (arrivalBoost.current ?? 0);
     coreUniforms.uBoost.value = THREE.MathUtils.damp(coreUniforms.uBoost.value, boostTarget, 2.5, delta);
-    band1.uBoost.value = coreUniforms.uBoost.value;
-    band2.uBoost.value = coreUniforms.uBoost.value;
 
     const dimTarget = dimmed ? 1 : 0;
     coreUniforms.uDim.value = THREE.MathUtils.damp(coreUniforms.uDim.value, dimTarget, 2.5, delta);
-    band1.uDim.value = coreUniforms.uDim.value;
-    band2.uDim.value = coreUniforms.uDim.value;
+
+    // Condense out of the parting light, a beat behind the Before orb, so the
+    // pair resolves left-then-right — the forged gold is the destination.
+    const intro = introRef.current ?? 1;
+    const reveal = easeOutCubic(THREE.MathUtils.clamp((intro - 0.14) / 0.86, 0, 1));
+    const emerge = reveal * (1 - reveal) * 4;
 
     if (groupRef.current) {
       groupRef.current.rotation.y += delta * 0.045;
@@ -568,18 +680,31 @@ function AfterOrb({
       liftRef.current = THREE.MathUtils.damp(liftRef.current, liftTarget, 1.8, delta);
       groupRef.current.position.y = position[1] + Math.sin(t * 0.4 + 1.3) * 0.05 + liftRef.current;
 
-      const scaleTarget = selected ? SELECT_SCALE : 1;
+      const scaleTarget = (selected ? SELECT_SCALE : 1) * reveal;
       const nextScale = THREE.MathUtils.damp(groupRef.current.scale.x, scaleTarget, 1.8, delta);
       groupRef.current.scale.setScalar(nextScale);
     }
 
     if (glowLightRef.current) {
-      glowLightRef.current.intensity = (1.1 + coreUniforms.uBoost.value * 0.8) * (1 - coreUniforms.uDim.value * 0.6);
+      glowLightRef.current.intensity =
+        (1.1 + coreUniforms.uBoost.value * 0.8 + emerge * 1.4) * (1 - coreUniforms.uDim.value * 0.6);
     }
   });
 
   return (
-    <group ref={groupRef} position={position}>
+    <group position={position}>
+      {/* Star-dust aura — a peacock-hued cloud of cosmic dust and faint stars
+          swirling around the orb. It sits on the outer, non-rotating group and
+          does all its own motion in the shader, so it's independent of the
+          orb's spin and selection scale. No halo, no rings. */}
+      <StarDustAura
+        count={900}
+        boostUniform={coreUniforms.uBoost}
+        dimUniform={coreUniforms.uDim}
+        timeRef={timeRef}
+      />
+
+      <group ref={groupRef}>
       <mesh
         onPointerOver={(e) => {
           e.stopPropagation();
@@ -594,7 +719,7 @@ function AfterOrb({
           onClick();
         }}
       >
-        <icosahedronGeometry args={[0.72, 4]} />
+        <icosahedronGeometry args={[0.76, 7]} />
         <shaderMaterial
           vertexShader={afterVertexShader}
           fragmentShader={afterFragmentShader}
@@ -602,43 +727,8 @@ function AfterOrb({
         />
       </mesh>
 
-      {/* polygonOffset biases the bands' depth so the two points where each
-          ring crosses the sphere's silhouette resolve deterministically
-          instead of tying with the sphere's depth — an unbiased tie there
-          flickers between "in front" and "behind" every frame. */}
-      <mesh rotation={[Math.PI / 2.3, 0, 0.3]} renderOrder={1}>
-        <torusGeometry args={[0.95, 0.045, 20, 128]} />
-        <shaderMaterial
-          vertexShader={bandVertexShader}
-          fragmentShader={bandFragmentShader}
-          uniforms={band1}
-          transparent
-          depthWrite={false}
-          blending={THREE.AdditiveBlending}
-          side={THREE.DoubleSide}
-          polygonOffset
-          polygonOffsetFactor={-4}
-          polygonOffsetUnits={-4}
-        />
-      </mesh>
-      <mesh rotation={[Math.PI / 1.8, 0.4, -0.2]} renderOrder={2}>
-        <torusGeometry args={[1.08, 0.03, 20, 128]} />
-        <shaderMaterial
-          vertexShader={bandVertexShader}
-          fragmentShader={bandFragmentShader}
-          uniforms={band2}
-          transparent
-          depthWrite={false}
-          blending={THREE.AdditiveBlending}
-          side={THREE.DoubleSide}
-          polygonOffset
-          polygonOffsetFactor={-4}
-          polygonOffsetUnits={-4}
-        />
-      </mesh>
-
-      <OrbitingParticles radius={1.3} count={70} color="#ffd98a" boost={arrivalBoost} timeRef={timeRef} />
       <pointLight ref={glowLightRef} color="#f3cf6e" intensity={1.1} distance={4} />
+      </group>
     </group>
   );
 }
@@ -833,7 +923,9 @@ function DustField({ timeRef }: { timeRef: React.RefObject<THREE.Timer> }) {
             vec2 c = gl_PointCoord - 0.5;
             float d = length(c);
             float alpha = smoothstep(0.5, 0.0, d);
-            gl_FragColor = vec4(vec3(0.85, 0.82, 0.75), alpha * 0.25);
+            // Warm gold-lit dust rather than neutral grey, so the motes belong
+            // to the same warm room as the orbs and bronze backdrop.
+            gl_FragColor = vec4(vec3(0.95, 0.83, 0.62), alpha * 0.26);
           }
         `}
       />
@@ -940,14 +1032,48 @@ function Starfield({
 /* Background                                                              */
 /* ----------------------------------------------------------------------- */
 
-function Backdrop() {
+/* A single, smooth champagne / antique-gold surface — no metal grain or
+   texture, just clean light on gold. A soft vertical wash (champagne toward the
+   top, deeper antique gold below), gentle reflection pools where each orb's
+   light falls on the surface (warm bronze under the raw Before orb, champagne +
+   a whisper of peacock under the forged After orb), a broad camera-responsive
+   sheen, and a slow polish sweep. Deliberately understated: the gold is the
+   luxury canvas, the orbs remain the focal points. The corners only deepen
+   gently — the field stays gold everywhere, never black.
+
+   auraRef feeds the After orb's transformation energy into the reflection so the
+   iridescence gently tints the surrounding gold as it flares. */
+function Backdrop({
+  timeRef,
+  auraRef,
+}: {
+  timeRef: React.RefObject<THREE.Timer>;
+  auraRef: React.RefObject<number>;
+}) {
   const uniforms = useMemo(
     () => ({
-      uColor: { value: new THREE.Color("#050403") },
-      uGlow: { value: new THREE.Color("#16110a") },
+      uTime: { value: 0 },
+      uAura: { value: 0 },
+      uDeep: { value: new THREE.Color("#281d0f") },      // deep antique gold, lower/edges
+      uGold: { value: new THREE.Color("#7d6234") },      // main gold field
+      uChampagne: { value: new THREE.Color("#c2a165") }, // champagne highlight, upper/pools
+      uReflBefore: { value: new THREE.Color("#54401f") },
+      uReflAfter: { value: new THREE.Color("#8a6f3a") },
     }),
     []
   );
+
+  useFrame(() => {
+    const delta = timeRef.current.getDelta();
+    uniforms.uTime.value = timeRef.current.getElapsed();
+    uniforms.uAura.value = THREE.MathUtils.damp(
+      uniforms.uAura.value,
+      auraRef.current ?? 0,
+      3,
+      delta
+    );
+  });
+
   return (
     <mesh position={[0, 0, -4]} scale={[20, 12, 1]}>
       <planeGeometry args={[1, 1]} />
@@ -955,20 +1081,67 @@ function Backdrop() {
         uniforms={uniforms}
         vertexShader={`
           varying vec2 vUv;
+          varying vec3 vWorld;
           void main() {
             vUv = uv;
+            vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
             gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
           }
         `}
         fragmentShader={`
-          uniform vec3 uColor;
-          uniform vec3 uGlow;
+          uniform float uTime;
+          uniform float uAura;
+          uniform vec3 uDeep;
+          uniform vec3 uGold;
+          uniform vec3 uChampagne;
+          uniform vec3 uReflBefore;
+          uniform vec3 uReflAfter;
           varying vec2 vUv;
+          varying vec3 vWorld;
+
+          ${IRIDESCENCE_GLSL}
+
           void main() {
-            float d = distance(vUv, vec2(0.5));
-            float g = smoothstep(0.75, 0.0, d);
-            vec3 color = mix(uColor, uGlow, g * 0.6);
-            gl_FragColor = vec4(color, 1.0);
+            vec2 uv = vUv;
+            vec2 cc = uv - 0.5;
+            cc.x *= 1.7;
+            float d = length(cc);
+
+            // Smooth vertical wash: deep antique gold low, gold through the
+            // middle, champagne toward the top — a clean lit gold field.
+            vec3 col = mix(uDeep, uGold, smoothstep(-0.05, 0.5, uv.y));
+            col = mix(col, uChampagne, smoothstep(0.45, 1.05, uv.y) * 0.6);
+
+            // Soft reflection pools where each orb's light lands on the surface.
+            float lb = smoothstep(0.42, 0.0, distance(uv, vec2(0.30, 0.5)));
+            float la = smoothstep(0.48, 0.0, distance(uv, vec2(0.70, 0.5)));
+            col += uReflBefore * lb * 0.26;
+            col += uReflAfter * la * 0.34;
+
+            // Broad polished sheen that responds to the camera: reflect the view
+            // ray off the flat surface and read one soft environment light lobe,
+            // so the highlight glides as the camera parallaxes.
+            vec3 vd = normalize(cameraPosition - vWorld);
+            vec3 refl = reflect(-vd, vec3(0.0, 0.0, 1.0));
+            float sheen = smoothstep(0.1, 0.95, dot(refl, normalize(vec3(0.4, 0.7, 0.6))) * 0.5 + 0.5);
+            col += uChampagne * sheen * 0.10;
+
+            // A slow broad polish sweep gives the gold life without motion that
+            // draws the eye from the orbs.
+            float sweep = 0.5 + 0.5 * sin(uv.x * 2.6 - uv.y * 1.4 + uTime * 0.1);
+            col += uChampagne * pow(sweep, 3.0) * 0.04;
+
+            // The After orb's iridescence gently tints the gold around it,
+            // rising as its transformation energy flares.
+            vec3 auraTint = peacockHue(uTime * 0.03 + uv.x * 0.4);
+            auraTint = mix(auraTint, uChampagne, 0.4);
+            col += auraTint * la * (0.04 + uAura * 0.12);
+
+            // Gentle radial vignette — the corners only deepen into antique
+            // gold to frame the orbs; the field never falls to black.
+            col *= mix(0.72, 1.0, smoothstep(1.25, 0.15, d));
+
+            gl_FragColor = vec4(col, 1.0);
           }
         `}
       />
@@ -983,10 +1156,12 @@ function Backdrop() {
 function CameraRig({
   dollyRef,
   tiltRef,
+  introRef,
   timeRef,
 }: {
   dollyRef: React.RefObject<number>;
   tiltRef: React.RefObject<number>;
+  introRef: React.RefObject<number>;
   timeRef: React.RefObject<THREE.Timer>;
 }) {
   const { camera, pointer } = useThree();
@@ -996,17 +1171,27 @@ function CameraRig({
     const delta = timeRef.current.getDelta();
     const dolly = dollyRef.current ?? 0;
     const tilt = tiltRef.current ?? 0;
-    const targetX = base.x + pointer.x * 0.18 + tilt * 0.3;
-    const targetY = base.y + pointer.y * 0.1;
-    const targetZ = base.z - dolly * 0.22;
 
-    camera.position.x = THREE.MathUtils.damp(camera.position.x, targetX, 2, delta);
-    camera.position.y = THREE.MathUtils.damp(camera.position.y, targetY, 2.5, delta);
-    camera.position.z = THREE.MathUtils.damp(camera.position.z, targetZ, 2, delta);
-    camera.lookAt(tilt * 0.4, 0.05, 0);
+    // Arrival: at intro 0 the camera is still inside the parting light —
+    // pushed in, lifted, looking slightly down into the forming forge — and
+    // eases back to its resting frame as intro → 1. The offset vanishes
+    // completely at rest, so idle behaviour is byte-for-byte unchanged.
+    const arrival = 1 - easeOutCubic(introRef.current ?? 1);
+
+    const targetX = base.x + pointer.x * 0.18 + tilt * 0.3;
+    const targetY = base.y + pointer.y * 0.1 + arrival * 0.5;
+    const targetZ = base.z - dolly * 0.22 - arrival * 1.7;
+
+    // Snap-follow while the light still hides the arrival (fast damp), then
+    // relax to the gentle idle damping once we're on screen.
+    const posDamp = 2 + arrival * 2.5;
+    camera.position.x = THREE.MathUtils.damp(camera.position.x, targetX, posDamp, delta);
+    camera.position.y = THREE.MathUtils.damp(camera.position.y, targetY, posDamp + 0.5, delta);
+    camera.position.z = THREE.MathUtils.damp(camera.position.z, targetZ, posDamp, delta);
+    camera.lookAt(tilt * 0.4, 0.05 - arrival * 0.15, 0);
 
     if (camera instanceof THREE.PerspectiveCamera) {
-      const targetFov = 45 - dolly * 1.2;
+      const targetFov = 45 - dolly * 1.2 + arrival * 4;
       camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 2, delta);
       camera.updateProjectionMatrix();
     }
@@ -1024,9 +1209,11 @@ export type Selected = "before" | "after" | null;
 function Scene({
   selected,
   setSelected,
+  introRef,
 }: {
   selected: Selected;
   setSelected: (v: Selected) => void;
+  introRef: React.RefObject<number>;
 }) {
   const timeRef = useSharedTimer();
 
@@ -1081,10 +1268,17 @@ function Scene({
 
   return (
     <>
-      <CameraRig dollyRef={dollyRef} tiltRef={tiltRef} timeRef={timeRef} />
-      <Backdrop />
+      <CameraRig dollyRef={dollyRef} tiltRef={tiltRef} introRef={introRef} timeRef={timeRef} />
+      <Backdrop timeRef={timeRef} auraRef={arrivalBoostRef} />
       <ambientLight intensity={0.18} />
       <directionalLight position={[3, 4, 5]} intensity={0.3} color="#fff3da" />
+
+      {/* No ambientLight/directionalLight here on purpose: every visible
+          surface in this scene is a plain THREE.ShaderMaterial (not
+          `lights: true`), so scene lights never reach them — the only
+          real "lighting" is the fresnel/wrap terms hand-rolled inside
+          each fragment shader below, plus the two dynamic pointLights
+          used for the glow flicker. */}
 
       <Starfield timeRef={timeRef} boostRef={starBoostRef} />
       <DustField timeRef={timeRef} />
@@ -1106,6 +1300,7 @@ function Scene({
         onClick={() => setSelected("before")}
         timeRef={timeRef}
         starlight={starBoostRef}
+        introRef={introRef}
       />
 
       <AfterOrb
@@ -1117,15 +1312,22 @@ function Scene({
         onClick={() => setSelected("after")}
         arrivalBoost={arrivalBoostRef}
         timeRef={timeRef}
+        introRef={introRef}
       />
 
       <Html position={[beforePos[0], -1.25, 0]} center distanceFactor={8} zIndexRange={[10, 0]}>
-        <div className="pointer-events-none select-none whitespace-nowrap text-center font-light tracking-[0.25em] text-[#b9a98a]" style={{ fontSize: "13px" }}>
+        <div
+          className="pointer-events-none select-none whitespace-nowrap text-center font-light tracking-[0.25em] text-white/80"
+          style={{ fontSize: "13px", textShadow: "0 1px 1px rgba(227, 144, 42, 0.4)" }}
+        >
           BEFORE DWARKA
         </div>
       </Html>
       <Html position={[afterPos[0], -1.25, 0]} center distanceFactor={8} zIndexRange={[10, 0]}>
-        <div className="pointer-events-none select-none whitespace-nowrap text-center font-light tracking-[0.25em] text-[#f3d98a]" style={{ fontSize: "13px" }}>
+        <div
+          className="pointer-events-none select-none whitespace-nowrap text-center font-light tracking-[0.25em] text-white/80"
+          style={{ fontSize: "13px", textShadow: "0 1px 1px rgba(227, 144, 42, 0.4)" }}
+        >
           AFTER DWARKA
         </div>
       </Html>
@@ -1254,22 +1456,68 @@ function SelectionPanel({
 export default function BeforeAfterDwarka() {
   const [selected, setSelected] = useState<Selected>(null);
 
+  // The splash sits on top of this section for the whole intro, but r3f's
+  // default frameloop renders regardless of visibility — a continuous
+  // high-performance WebGL loop competing with the splash video's decode for
+  // the same GPU. Hold the loop until the intro hands off. Outside
+  // IntroProvider `introComplete` defaults to true, so this scene renders
+  // normally anywhere else.
+  const { introComplete } = useIntro();
+
+  // Arrival progress, fed from the shared bridge timeline. 0 while the forge
+  // is still hidden inside the parting light, 1 once it has fully settled.
+  // Read imperatively inside the r3f render loop (camera + orbs), so scrolling
+  // never triggers a React re-render of the WebGL tree.
+  const introRef = useRef(1);
+
+  useEffect(() => {
+    if (prefersReducedMotion()) {
+      introRef.current = 1;
+      return;
+    }
+
+    let ticking = false;
+    function apply() {
+      ticking = false;
+      const h = window.innerHeight || 1;
+      const depth = window.scrollY / h;
+      introRef.current = smoothstep(BRIDGE.arriveStart, BRIDGE.arriveEnd, depth);
+    }
+    function onScroll() {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(apply);
+    }
+
+    apply();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   return (
-    <div style={{ position: "relative", width: "100%", height: "100vh", background: "#050403" }}>
+    <div
+      style={{ position: "relative", width: "100%", height: "100vh", background: "#6a5330" }}
+      data-navbar-bg="#d9be86"
+      data-navbar-fg="#2a1e0d"
+    >
       <Canvas
         camera={{ position: [0, 0.1, 5.2], fov: 45, near: 0.1, far: 50 }}
-        dpr={[1, 1.75]}
+        frameloop={introComplete ? "always" : "never"}
+        dpr={[1, 2]}
         gl={{ antialias: true, powerPreference: "high-performance" }}
+        style={{ filter: "contrast(1.03) saturate(1.05)" }}
       >
-        <Scene selected={selected} setSelected={setSelected} />
+        <Scene selected={selected} setSelected={setSelected} introRef={introRef} />
       </Canvas>
       <div
         style={{
           position: "absolute",
           inset: 0,
           pointerEvents: "none",
+          // A very soft warm deepening at the corners — keeps the gold field
+          // reading as gold everywhere (never black), just gently framed.
           background:
-            "radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.4) 100%)",
+            "radial-gradient(ellipse at center, transparent 62%, rgba(24,15,5,0.20) 100%)",
         }}
       />
       <SelectionPanel selected={selected} onClose={() => setSelected(null)} />
