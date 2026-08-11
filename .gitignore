@@ -42,3 +42,6 @@ next-env.d.ts
 
 # one-off Playwright verification scripts (hardcoded local paths)
 verify-*.mjs
+
+# pre-optimization video originals (kept locally, never deployed)
+.video-originals
