@@ -32,6 +32,7 @@
    ----------------------------------------------------------------------- */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { SkipIntroButton } from "@/components/SkipIntroButton";
 import { useDeviceBudget } from "@/lib/deviceTier";
 import { VIDEOS, sourcesFor, targetHeight } from "@/lib/mediaManifest";
 
@@ -50,9 +51,11 @@ interface Props {
   onComplete?: () => void;
   /** Try to play with audio. Falls back to muted if the browser refuses. */
   withSound?: boolean;
+  /** Offer the "Skip intro" exit. Off for previews that exist to be watched. */
+  skippable?: boolean;
 }
 
-export function SplashScreen({ onComplete, withSound = false }: Props) {
+export function SplashScreen({ onComplete, withSound = false, skippable = true }: Props) {
   const oneRef = useRef<HTMLVideoElement>(null);
   const twoRef = useRef<HTMLVideoElement>(null);
   const budget = useDeviceBudget();
@@ -127,6 +130,10 @@ export function SplashScreen({ onComplete, withSound = false }: Props) {
   // Touch and keyboard have no meaningful "leave", so they commit to playing
   // straight through rather than stranding the video mid-shot.
   const committedRef = useRef(false);
+  // Latches so a second Escape (or a click landing during the caller's fade)
+  // is inert. Mirrored into state because it also unmounts the button.
+  const skippedRef = useRef(false);
+  const [skipped, setSkipped] = useState(false);
 
   /* --- Preload video 2, but only once video 1 is safe ------------------
      Both videos wanting the pipe at once is the difference between video 1
@@ -231,7 +238,7 @@ export function SplashScreen({ onComplete, withSound = false }: Props) {
 
   /* --- The handoff ----------------------------------------------------- */
   const beginHandoff = useCallback(() => {
-    if (phaseRef.current === "handoff") return;
+    if (phaseRef.current === "handoff" || skippedRef.current) return;
     enter("handoff");
 
     const two = twoRef.current;
@@ -240,6 +247,31 @@ export function SplashScreen({ onComplete, withSound = false }: Props) {
       void two.play().catch(() => {});
     }
   }, [enter]);
+
+  /* --- Skipping ---------------------------------------------------------
+     `onComplete` is the only door out of this component, so a skip leaves
+     through the same one a natural finish does — the caller fades the overlay
+     either way. Two things happen on the way through:
+
+       · both videos are paused. Left rolling they keep decoding behind the
+         caller's fade, which on a weak GPU is exactly the cost the visitor
+         just asked to stop paying;
+       · nothing about the *picture* changes. The frame the shot was sitting
+         on is the frame it fades out on. Forcing the handoff here instead
+         would dissolve to a video 2 that may never have been armed — a cut
+         to black underneath the fade.
+
+     `skippedRef` then blocks the handoff for good, so neither the rAF tail
+     watcher nor a late `onEnded` can restart the sequence mid-fade. */
+  const skip = useCallback(() => {
+    if (skippedRef.current) return;
+    skippedRef.current = true;
+    setSkipped(true);
+    committedRef.current = true;
+    oneRef.current?.pause();
+    twoRef.current?.pause();
+    onComplete?.();
+  }, [onComplete]);
 
   /* --- Watch video 1's tail ------------------------------------------
      rAF rather than `timeupdate`, which only fires ~4x/sec and would make
@@ -250,7 +282,9 @@ export function SplashScreen({ onComplete, withSound = false }: Props) {
 
     const tick = () => {
       const one = oneRef.current;
-      if (!one || phaseRef.current !== "forward") return;
+      // A skip freezes the playhead, so the tail condition below would never
+      // come true and this would spin until the overlay unmounts.
+      if (!one || skippedRef.current || phaseRef.current !== "forward") return;
       const { duration, currentTime } = one;
       if (Number.isFinite(duration) && duration - currentTime <= HANDOFF_LEAD) {
         beginHandoff();
@@ -330,6 +364,10 @@ export function SplashScreen({ onComplete, withSound = false }: Props) {
           <source key={v.src} src={v.src} type={v.type} />
         ))}
       </video>
+
+      {/* The exit. Above the door in z, so it stays reachable on a narrow
+          viewport where the door spans the full width. */}
+      {skippable && !skipped && <SkipIntroButton onSkip={skip} />}
 
       {/* The door. Stays mounted through the whole hover dance — it is what
           detects the pointer leaving — and is dropped once the handoff

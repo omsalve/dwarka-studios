@@ -61,6 +61,19 @@ export interface DeviceBudget {
   allowHeavyFilters: boolean;
   /** Primary input is a touch screen — a phone or tablet, not a laptop. */
   coarsePointer: boolean;
+  /**
+   * A phone specifically: touch primary AND a short side under 700px.
+   *
+   * Distinct from `coarsePointer`, which also catches tablets, and from
+   * `tier`, which can be wrong (Safari masks the GPU, so an iPhone and a
+   * budget Android can score alike). Both halves are required: a tablet is
+   * touch but roomy and usually capable, and a narrow desktop window is
+   * small but has a mouse and a real GPU.
+   *
+   * Used where the right answer is a different *layout*, not a cheaper
+   * version of the same one — see components/scenes/DeferredBook.
+   */
+  isPhone: boolean;
   /** The visitor asked the OS to keep motion down. */
   reducedMotion: boolean;
   /** Save-Data header or a 2g/3g-class connection. */
@@ -171,6 +184,9 @@ const SERVER_BUDGET: DeviceBudget = {
   // blur a phone cannot afford.
   allowHeavyFilters: false,
   coarsePointer: false,
+  // False before measurement so the server and the hydrating client always
+  // agree on which layout to render. See DeferredBook for why that is safe.
+  isPhone: false,
   reducedMotion: false,
   frugalNetwork: false,
   measured: false,
@@ -233,6 +249,7 @@ export function getDeviceBudget(): DeviceBudget {
     // and a full-viewport animated blur is where that shows up first.
     allowHeavyFilters: !coarsePointer && tier !== "low" && !reducedMotion,
     coarsePointer,
+    isPhone: coarsePointer && smallViewport,
     reducedMotion,
     frugalNetwork,
     measured: true,

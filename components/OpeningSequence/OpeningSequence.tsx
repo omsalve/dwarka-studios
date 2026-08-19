@@ -12,7 +12,9 @@
    in FeatherInteraction, and the state machine in useFeatherState.
    ----------------------------------------------------------------------- */
 
+import { useCallback, useRef } from "react";
 import { motion } from "motion/react";
+import { SkipIntroButton } from "@/components/SkipIntroButton";
 import { BackgroundVideos } from "./BackgroundVideos";
 import { FeatherInteraction } from "./FeatherInteraction";
 import { useFeatherState } from "./useFeatherState";
@@ -26,11 +28,24 @@ interface Props {
   className?: string;
   /** Fired after the unlock flood completes — reveal the real page here. */
   onUnlock?: () => void;
+  /** Offer the "Skip intro" exit. Off for previews that exist to be watched. */
+  skippable?: boolean;
 }
 
-export function OpeningSequence({ className = "", onUnlock }: Props) {
+export function OpeningSequence({ className = "", onUnlock, skippable = true }: Props) {
   const controller = useFeatherState();
   const unlocked = controller.state === "unlocked";
+
+  /* Skipping goes straight to `onUnlock`, past the flood. The flood is the
+     *reward* for completing the hold — replaying it for someone who declined
+     the gesture would make the exit slower than the intro it dismisses. The
+     caller's fade is the whole transition instead. */
+  const skippedRef = useRef(false);
+  const skip = useCallback(() => {
+    if (skippedRef.current) return;
+    skippedRef.current = true;
+    onUnlock?.();
+  }, [onUnlock]);
 
   const floodOrigin = `${FEATHER_HITBOX.cx * 100}% ${FEATHER_HITBOX.cy * 100}%`;
 
@@ -41,6 +56,11 @@ export function OpeningSequence({ className = "", onUnlock }: Props) {
     >
       <BackgroundVideos crossfade={controller.crossfade} />
       <FeatherInteraction controller={controller} />
+
+      {/* The exit. Retired once the hold completes — the flood is already
+          taking us out, and a button riding on top of it would only be there
+          to be clicked into a transition that has begun. */}
+      {skippable && !unlocked && <SkipIntroButton onSkip={skip} />}
 
       {/* Unlock flood — champagne light expands from the feather to engulf the
           frame, then hands off to the caller to lift the splash. */}

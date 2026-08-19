@@ -10,12 +10,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { ContactShadows, Environment, Lightformer, useTexture } from "@react-three/drei";
-import { AdaptiveResolution } from "@/components/three/AdaptiveResolution";
-import { useDeviceBudget, type DeviceBudget } from "@/lib/deviceTier";
-import { useSceneActive } from "@/lib/useVisibility";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import * as THREE from "three";
+import {
+  FOUNDER_NAME,
+  FOUNDER_PARAGRAPHS,
+  FOUNDER_ROLE,
+  SIGNATURE,
+} from "@/components/foundersNote/letter";
 
 if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
@@ -36,21 +39,7 @@ const OPEN_ANGLE_MAX = THREE.MathUtils.degToRad(158);
 // All baked canvas textures (cover foil, pages) are drawn at this multiple of
 // their original 960x1280 design resolution — higher texel density keeps the
 // gold-foil title and letter text crisp when the camera pushes in on open.
-//
-// This is now a *budget*, not a constant. At 1.6 the five baked textures are
-// 1536x2048 each: ~12 megapixels of synchronous 2D canvas painting (paper
-// fibre, foxing, foil, laid-out body text) on the main thread at mount, plus
-// ~60MB of VRAM. On a mid or low tier that is the single longest task on the
-// page, so the density drops with the device — the letter stays legible,
-// there are simply fewer texels behind it.
-//
-// Written exactly once, by applyTextureBudget(), before any texture is baked;
-// every builder below reads it synchronously during that same commit.
-let TEX_SCALE = 1.6;
-
-function applyTextureBudget(scale: number) {
-  TEX_SCALE = scale;
-}
+const TEX_SCALE = 1.6;
 
 const LEATHER_DARK = "#1c130d";
 const LEATHER_EDGE = "#150e09";
@@ -60,19 +49,10 @@ const GOLD_LIGHT = "#e6cd86";
 const CREAM = "#f6efdf";
 const INK = "#2c2820";
 
-// The left page carries the whole letter now, so it is written as a pair of
-// tight editorial paragraphs that breathe on a single page rather than the two
-// half-letters the old two-page split used. The fuller original still lives in
-// the sr-only block in FoundersNote.tsx for assistive tech / crawlers.
-const FOUNDER_PARAGRAPHS = [
-  "Since childhood I have been captivated by gaming and animation — by worlds you do not merely watch, but step inside. I have always believed that when we see something we remember it for a while, yet when we truly experience something we never forget it.",
-  "That belief is where this journey began. Dwarka Studios exists to give people that unforgettable feeling, and to weave into it the history, culture, and heritage of our country — proof that the craftsmanship of our past belongs inside the most advanced experiences of the future. This is only the beginning, and I am glad you are here for it.",
-];
-
-const FOUNDER_NAME = "Srikaran Adapa";
-const FOUNDER_ROLE = "Founder · Dwarka Studios";
-// Handwritten-style signature scrawl painted above the typeset name.
-const SIGNATURE = "Srikaran Adapa";
+// The letter's words live in components/foundersNote/letter.ts so that this
+// scene and the typeset version phones get read from one source and cannot
+// drift apart. That module has no dependencies, so reading a string there does
+// not pull three.js in with it.
 
 /* ----------------------------------------------------------------------- */
 /* Small math helpers                                                      */
@@ -1070,48 +1050,12 @@ function CameraRig({
 /* Scene                                                                   */
 /* ----------------------------------------------------------------------- */
 
-/* -----------------------------------------------------------------------
-   ShadowGovernor — a shadow map is a full extra render pass
-   ─────────────────────────────────────────────────────────────────────
-   three.js re-renders every casting light's depth map on every frame by
-   default. For this scene that was a 2048x2048 pass, every frame, forever —
-   for a book that is completely static except while it is being opened (and
-   a ~0.3 degree idle sway whose effect on a soft shadow is not resolvable).
-
-   So: turn autoUpdate off, and request exactly one refresh whenever the
-   hinge has actually moved enough to matter. Opening the book still shows a
-   live, correct shadow; sitting still costs nothing.
-   ----------------------------------------------------------------------- */
-function ShadowGovernor({ smoothOpenRef }: { smoothOpenRef: React.RefObject<number> }) {
-  const gl = useThree((state) => state.gl);
-  const lastRendered = useRef(-1);
-
-  useEffect(() => {
-    gl.shadowMap.autoUpdate = false;
-    gl.shadowMap.needsUpdate = true;
-    return () => {
-      gl.shadowMap.autoUpdate = true;
-    };
-  }, [gl]);
-
-  useFrame(() => {
-    const open = smoothOpenRef.current ?? 0;
-    if (Math.abs(open - lastRendered.current) < 0.004) return;
-    lastRendered.current = open;
-    gl.shadowMap.needsUpdate = true;
-  });
-
-  return null;
-}
-
 function Scene({
   openRef,
   reducedMotion,
-  budget,
 }: {
   openRef: React.RefObject<number>;
   reducedMotion: boolean;
-  budget: DeviceBudget;
 }) {
   const cinzel = useMemo(() => resolveFont("--font-cinzel", "serif"), []);
   const playfair = useMemo(() => resolveFont("--font-playfair", "serif"), []);
@@ -1140,8 +1084,6 @@ function Scene({
         reducedMotion={reducedMotion}
       />
       <CameraRig smoothOpenRef={smoothOpenRef} reducedMotion={reducedMotion} />
-      <AdaptiveResolution maxDpr={budget.maxDpr} />
-      {budget.shadowMapSize > 0 && <ShadowGovernor smoothOpenRef={smoothOpenRef} />}
 
       {/* Procedural environment (baked once — Environment defaults to
           frames=1 — so this costs nothing per frame) instead of an HDRI
@@ -1150,7 +1092,7 @@ function Scene({
           direct light, so without this they'd read as flat/dull regardless
           of how the direct lights below are tuned. background stays false
           so the transparent canvas still shows the page behind it. */}
-      <Environment resolution={budget.tier === "low" ? 128 : 256}>
+      <Environment resolution={256}>
         <Lightformer form="rect" intensity={1.2} color="#fff6e6" scale={[4, 4, 1]} position={[0, 3, 1]} rotation={[-Math.PI / 2, 0, 0]} />
         <Lightformer form="rect" intensity={2.4} color="#ffd9a0" scale={[2, 3, 1]} position={[2.4, 1.2, 2.4]} rotation={[0, -Math.PI / 4, 0]} />
         <Lightformer form="rect" intensity={1} color="#cfe0ee" scale={[2, 3, 1]} position={[-2.5, 0.5, 1.5]} rotation={[0, Math.PI / 3, 0]} />
@@ -1161,11 +1103,8 @@ function Scene({
         position={[2.4, 3.2, 3.6]}
         intensity={1.15}
         color="#ffe3b0"
-        // A low-tier GPU keeps the key light and drops only the real-time
-        // depth pass; the ContactShadows below still seat the book on the
-        // page, so the book never looks like it is floating.
-        castShadow={budget.shadowMapSize > 0}
-        shadow-mapSize={[budget.shadowMapSize || 512, budget.shadowMapSize || 512]}
+        castShadow
+        shadow-mapSize={[2048, 2048]}
         shadow-camera-left={-2.2}
         shadow-camera-right={2.2}
         shadow-camera-top={1.8}
@@ -1203,11 +1142,7 @@ function Scene({
           opacity={0.4}
           blur={2.6}
           far={1.1}
-          // Contact shadows re-render a depth pass plus two blur passes every
-          // frame. At 512 that was the second-most expensive thing in the
-          // scene; the shadow is soft and heavily blurred, so the drop to
-          // 256/384 is not resolvable but is 2-4x cheaper per frame.
-          resolution={budget.tier === "high" ? 384 : 256}
+          resolution={512}
           scale={6}
           color="#1c130d"
         />
@@ -1223,7 +1158,6 @@ function Scene({
 export function FoundersNoteBook() {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const openRef = useRef(0);
-  const budget = useDeviceBudget();
   const [fontsReady, setFontsReady] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(
     () => typeof window !== "undefined" &&
@@ -1237,11 +1171,8 @@ export function FoundersNoteBook() {
     return () => mql.removeEventListener("change", handleChange);
   }, []);
 
-  // Texture density is decided before the first bake, and the bake happens in
-  // Scene's useMemo on the commit right after this flips true.
   useEffect(() => {
     let cancelled = false;
-    applyTextureBudget(budget.textureScale);
     const ready = document.fonts?.ready ?? Promise.resolve();
     ready.then(() => {
       if (!cancelled) setFontsReady(true);
@@ -1249,9 +1180,7 @@ export function FoundersNoteBook() {
     return () => {
       cancelled = true;
     };
-  }, [budget.textureScale]);
-
-  const active = useSceneActive(wrapperRef);
+  }, []);
 
   useEffect(() => {
     const el = wrapperRef.current;
@@ -1307,23 +1236,12 @@ export function FoundersNoteBook() {
     >
       {fontsReady && (
         <Canvas
-          shadows={budget.shadowMapSize > 0}
+          shadows
           camera={{ position: [0, 0.06, 3.6], fov: 36, near: 0.1, far: 20 }}
-          // Ceiling only — AdaptiveResolution walks the real ratio from here.
-          dpr={[1, budget.maxDpr]}
-          gl={{
-            antialias: budget.antialias,
-            alpha: true,
-            powerPreference: budget.tier === "low" ? "default" : "high-performance",
-            stencil: false,
-          }}
-          // The book used to render continuously from mount: a 2048^2 shadow
-          // pass, a 512^2 contact-shadow pass and two blurs, every frame, for
-          // a scene three viewports below the fold. It now renders only while
-          // it is actually on screen in a foregrounded tab.
-          frameloop={active ? "always" : "never"}
+          dpr={[1, 2]}
+          gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
         >
-          <Scene openRef={openRef} reducedMotion={reducedMotion} budget={budget} />
+          <Scene openRef={openRef} reducedMotion={reducedMotion} />
         </Canvas>
       )}
     </div>
