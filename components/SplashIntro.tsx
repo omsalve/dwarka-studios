@@ -59,6 +59,13 @@ export function SplashIntro() {
 
   return (
     <motion.div
+      // Paired with a CSS rule in globals.css. The server cannot know the
+      // visitor's motion preference, so it always renders this overlay and the
+      // client tears it out one commit later — which reads as the splash
+      // flashing up and vanishing. prefers-reduced-motion is the one skip
+      // signal CSS *can* evaluate before the first paint, so it does, and this
+      // cohort simply never sees the overlay.
+      data-splash-overlay
       className="fixed inset-0 z-[100]"
       initial={false}
       animate={{ opacity: ended ? 0 : 1 }}

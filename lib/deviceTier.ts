@@ -89,7 +89,17 @@ const STRONG_GPU = [
   "arc(tm) a", "apple a1", "apple a2", "adreno (tm) 7", "adreno (tm) 8",
 ];
 
-type GpuClass = "weak" | "unknown" | "strong";
+/* Safari (iOS and macOS) masks UNMASKED_RENDERER_WEBGL to this exact vendor
+   string rather than the model, as an anti-fingerprinting measure. It does not
+   tell us which Apple GPU — but it is a floor, and a high one: Apple has not
+   shipped a browser-capable device with a genuinely weak GPU in years.
+
+   Without this, every Safari device scored the same as a machine we know
+   nothing about, which put an iPhone 15 Pro in the same bucket as a Mali-G52
+   budget Android and an M3 MacBook below a Pixel. */
+const MASKED_APPLE = "apple gpu";
+
+type GpuClass = "weak" | "unknown" | "decent" | "strong";
 
 function probeGpu(): GpuClass {
   try {
@@ -111,6 +121,7 @@ function probeGpu(): GpuClass {
     if (!name) return "unknown";
     if (WEAK_GPU.some((k) => name.includes(k))) return "weak";
     if (STRONG_GPU.some((k) => name.includes(k))) return "strong";
+    if (name.includes(MASKED_APPLE)) return "decent";
     return "unknown";
   } catch {
     return "unknown";
@@ -188,12 +199,14 @@ export function getDeviceBudget(): DeviceBudget {
   let score = 0;
   score += cores >= 8 ? 2 : cores >= 4 ? 1 : 0;
   score += memory >= 8 ? 2 : memory >= 4 ? 1 : 0;
-  score += gpu === "strong" ? 3 : gpu === "weak" ? -3 : 0;
+  score += gpu === "strong" ? 3 : gpu === "decent" ? 2 : gpu === "weak" ? -3 : 0;
   score += coarsePointer ? -1 : 1;
   score += smallViewport ? -1 : 0;
-  // A 3x display on a machine that isn't demonstrably strong is a warning,
-  // not a compliment: it means 9x the fragments for the same scene.
-  score += dpr >= 2.5 && gpu !== "strong" ? -1 : 0;
+  // A 3x display on a GPU we know to be weak is a warning, not a compliment:
+  // it means 9x the fragments for the same scene. This deliberately does NOT
+  // fire on "unknown" — Safari reports unknown for everything, so penalising
+  // it here charged every Apple device twice for the same missing signal.
+  score += dpr >= 2.5 && gpu === "weak" ? -1 : 0;
 
   const tier: Tier = score >= 5 ? "high" : score >= 2 ? "mid" : "low";
 
@@ -207,9 +220,13 @@ export function getDeviceBudget(): DeviceBudget {
     shadowMapSize: tier === "high" ? 1536 : tier === "mid" ? 1024 : 0,
     particleScale: tier === "high" ? 1 : tier === "mid" ? 0.6 : 0.3,
     textureScale: tier === "high" ? 1.6 : tier === "mid" ? 1.1 : 0.75,
-    // ~30MB of video is only ever a good trade on a connection that can
-    // absorb it without starving the hero image and fonts.
-    allowHeavyVideo: !frugalNetwork && !reducedMotion && tier !== "low",
+    // Deliberately NOT gated on tier. That threshold was written when the
+    // splash was two 1080p masters totalling 29MB, where a weak device was a
+    // real reason to withhold it. The encode ladder has since taken it to
+    // 1.22MB on the 720 rung — less than this page's own JavaScript — and a
+    // 720p24 clip is trivial for any phone of the last decade to decode. What
+    // remains is a bandwidth question, not a device-class one.
+    allowHeavyVideo: !frugalNetwork && !reducedMotion,
     allowPointerFx: !coarsePointer && tier !== "low" && !reducedMotion,
     // Phones and tablets are excluded outright rather than by score: even a
     // fast phone SoC is pushing a 3x panel through a thermally-limited part,

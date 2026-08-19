@@ -358,3 +358,22 @@
     animation: none !important;
   }
 }
+
+/* -----------------------------------------------------------------------
+   Reduced motion — skip the splash before it can paint
+   ─────────────────────────────────────────────────────────────────────
+   SplashIntro drops the overlay for reduced-motion visitors, but it can only
+   do that once React has run on the client: the server has no way to know the
+   preference, so it renders the overlay either way and the client removes it
+   a commit later. That reads as the opening flashing up and disappearing.
+
+   The preference is one of the few capability signals CSS can answer before
+   the first paint, so it answers it here and those visitors land straight on
+   the hero. The React-side skip still runs and is still what unmounts the
+   element and releases the intro; this only stops it ever being seen.
+   ----------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  [data-splash-overlay] {
+    display: none;
+  }
+}
