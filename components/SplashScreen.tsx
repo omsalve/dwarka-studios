@@ -64,31 +64,53 @@ export function SplashScreen({ onComplete, withSound = false }: Props) {
      resolution and the connection, never from the file that happens to
      exist — see lib/mediaManifest. Until `npm run media` has produced the
      smaller encodes there is only one rung, and this resolves to it. */
+  /* null until the device has actually been measured — which means the
+     server and the hydrating client both render a <video> with a poster and
+     NO <source> children at all.
+
+     That is the whole trick, and both halves of it matter:
+
+     · Hydration. The rung cannot be derived from `window` during render,
+       because the server has no window and React would then hydrate markup
+       that disagrees with what the server sent. Deriving it from
+       `budget.measured` instead keeps the first client render byte-identical
+       to the server's; the real rung arrives on the commit straight after,
+       which is a normal update rather than a mismatch.
+
+     · Wasted bytes. A <video> runs its resource selection once, when it is
+       attached with sources. If the server emitted a 1080 ladder, a phone
+       would begin pulling the 1080 file during hydration and only then be
+       told to use 720. Emitting no sources server-side means nothing is
+       fetched until the right rung is known — and the poster paints in the
+       meantime, which is a better first frame than an empty black element
+       anyway. */
   const rung = useMemo(() => {
-    if (typeof window === "undefined") return 1080;
+    if (!budget.measured) return null;
     return targetHeight({
       tier: budget.tier,
       frugalNetwork: budget.frugalNetwork,
       viewportHeight: window.innerHeight,
       dpr: window.devicePixelRatio || 1,
     });
-  }, [budget.tier, budget.frugalNetwork]);
+  }, [budget.measured, budget.tier, budget.frugalNetwork]);
 
-  const sourcesOne = useMemo(() => sourcesFor(VIDEOS.splashOne, rung), [rung]);
-  const sourcesTwo = useMemo(() => sourcesFor(VIDEOS.splashTwo, rung), [rung]);
+  const sourcesOne = useMemo(
+    () => (rung === null ? [] : sourcesFor(VIDEOS.splashOne, rung)),
+    [rung]
+  );
+  const sourcesTwo = useMemo(
+    () => (rung === null ? [] : sourcesFor(VIDEOS.splashTwo, rung)),
+    [rung]
+  );
 
-  /* The rung is keyed onto the elements below, and that is load-bearing.
-     A <video> picks its source ONCE, when it is first attached. Swapping its
-     <source> children afterwards changes nothing unless load() is called
-     again — so without this, the server-rendered 1080 ladder would win on
-     every device and the whole adaptive selection would be decorative.
+  /* The rung is keyed onto both elements below, and that is load-bearing:
+     adding <source> children to a video that has already been attached does
+     not restart resource selection. Changing the key gives React a brand new
+     element instead, created with its sources already in place.
 
-     The server has no window to measure, so it always emits the 1080 rung.
-     On a desktop that is also what the client concludes, the key is
-     unchanged, and React reuses the element with no interruption. On a phone
-     or a throttled connection the key changes on the first client commit —
-     before any byte of video has been requested in earnest — and the element
-     remounts onto the correct ladder. */
+     The two keys have to be distinct from each other — they are siblings, and
+     sharing a key silently lets React confuse one video for the other. */
+  const rungKey = rung ?? "pending";
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [oneRetired, setOneRetired] = useState(false); // video 1 fully covered
@@ -274,7 +296,7 @@ export function SplashScreen({ onComplete, withSound = false }: Props) {
       {!oneRetired && (
         <video
           {...shared}
-          key={rung}
+          key={`one-${rungKey}`}
           ref={oneRef}
           poster={VIDEOS.splashOne.poster}
           onLoadedData={pinFirstFrame}
@@ -293,7 +315,7 @@ export function SplashScreen({ onComplete, withSound = false }: Props) {
       {/* Video 2 — top layer. The only thing that animates. */}
       <video
         {...shared}
-        key={rung}
+        key={`two-${rungKey}`}
         ref={twoRef}
         poster={VIDEOS.splashTwo.poster}
         // Overrides the shared "auto": armed by hand once video 1 is safe.
