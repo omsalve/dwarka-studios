@@ -45,6 +45,22 @@ export interface DeviceBudget {
   allowHeavyVideo: boolean;
   /** Whether pointer-tracked lighting/parallax is worth its repaints. */
   allowPointerFx: boolean;
+  /**
+   * Whether large *animated* CSS filters are affordable — in practice
+   * `blur()` over a big element.
+   *
+   * A blur cannot be composited: every frame of an animating blur is a fresh
+   * rasterisation of the element and its blur skirt, on the main thread's
+   * raster workers. A 46px blur ramping across a near-full-viewport masked
+   * layer is one of the most expensive things a browser can be asked to do,
+   * and it is the hero parchment's entrance.
+   *
+   * False on every touch device and on low-tier laptops. Static filters are
+   * unaffected — those rasterise once and then just composite.
+   */
+  allowHeavyFilters: boolean;
+  /** Primary input is a touch screen — a phone or tablet, not a laptop. */
+  coarsePointer: boolean;
   /** The visitor asked the OS to keep motion down. */
   reducedMotion: boolean;
   /** Save-Data header or a 2g/3g-class connection. */
@@ -139,6 +155,11 @@ const SERVER_BUDGET: DeviceBudget = {
   textureScale: 1,
   allowHeavyVideo: false,
   allowPointerFx: false,
+  // Effect flags default OFF before the probe, so the one render that happens
+  // without a measurement always fails toward cheap rather than toward a
+  // blur a phone cannot afford.
+  allowHeavyFilters: false,
+  coarsePointer: false,
   reducedMotion: false,
   frugalNetwork: false,
   measured: false,
@@ -190,6 +211,11 @@ export function getDeviceBudget(): DeviceBudget {
     // absorb it without starving the hero image and fonts.
     allowHeavyVideo: !frugalNetwork && !reducedMotion && tier !== "low",
     allowPointerFx: !coarsePointer && tier !== "low" && !reducedMotion,
+    // Phones and tablets are excluded outright rather than by score: even a
+    // fast phone SoC is pushing a 3x panel through a thermally-limited part,
+    // and a full-viewport animated blur is where that shows up first.
+    allowHeavyFilters: !coarsePointer && tier !== "low" && !reducedMotion,
+    coarsePointer,
     reducedMotion,
     frugalNetwork,
     measured: true,

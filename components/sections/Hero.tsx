@@ -87,6 +87,45 @@ export function Hero() {
   const textY = useTransform(textExit, (v) => v * -54);
   const textBlur = useTransform(textExit, (v) => `blur(${v * 9}px)`);
 
+  /* The parchment blot is three animated blurs stacked on one subtree: the
+     46px bloom it enters on, this scroll-driven defocus over the whole block,
+     and a 10px blur on each headline line. Blur is the one filter that cannot
+     be composited — every frame is a fresh rasterisation of the element plus
+     its blur skirt — and this element is near-viewport-sized, masked by seven
+     radial gradients, and carries an overlay-blended noise texture.
+
+     On a phone or a low-tier laptop that is the single worst moment on the
+     page, so those devices get the same parchment and the same copy without
+     the defocus: a plain opacity/transform entrance, which composites for
+     free. The blot itself stays — it is what makes dark parchment-ink type
+     legible over a photographed temple, not decoration. */
+  const heavyFilters = budget.allowHeavyFilters;
+
+  // Only bind the filter at all where it is affordable. Even `blur(0px)`
+  // promotes a layer and forces a filter pass on every scroll frame.
+  const textBlockStyle = heavyFilters
+    ? { opacity: textOpacity, y: textY, filter: textBlur }
+    : { opacity: textOpacity, y: textY };
+
+  const bloomFrom = heavyFilters
+    ? { opacity: 0, scale: 0.4, filter: "blur(46px)" }
+    : { opacity: 0, scale: 0.82 };
+  const bloomTo = heavyFilters
+    ? { opacity: 1, scale: 1, filter: "blur(0px)" }
+    : { opacity: 1, scale: 1 };
+  const bloomTransition = {
+    duration: heavyFilters ? 1.4 : 0.9,
+    ease: BLOOM_EASE,
+    delay: 0.15,
+  };
+
+  const lineFrom = heavyFilters
+    ? { opacity: 0, y: 18, filter: "blur(10px)" }
+    : { opacity: 0, y: 18 };
+  const lineTo = heavyFilters
+    ? { opacity: 1, y: 0, filter: "blur(0px)" }
+    : { opacity: 1, y: 0 };
+
   useEffect(() => {
     // A touch device has no hovering pointer to track, and a low-tier device
     // has better uses for a full-viewport transform than a 32px drift.
@@ -246,13 +285,13 @@ export function Hero() {
       {introComplete && (
         <>
           <motion.div
-            style={{ opacity: textOpacity, y: textY, filter: textBlur }}
+            style={textBlockStyle}
             className="absolute left-0 top-0 z-10 h-[92%] w-[98%] md:h-[68%] md:w-[78%] lg:h-[86%] lg:w-[84%]"
           >
             <motion.div
-              initial={{ opacity: 0, scale: 0.4, filter: "blur(46px)" }}
-              animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
-              transition={{ duration: 1.4, ease: BLOOM_EASE, delay: 0.15 }}
+              initial={bloomFrom}
+              animate={bloomTo}
+              transition={bloomTransition}
               style={{ transformOrigin: "2% 2%" }}
               className="absolute inset-0"
             >
@@ -269,8 +308,8 @@ export function Hero() {
               {LINES.map((line, i) => (
                 <motion.span
                   key={line}
-                  initial={{ opacity: 0, y: 18, filter: "blur(10px)" }}
-                  animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                  initial={lineFrom}
+                  animate={lineTo}
                   transition={{
                     duration: 0.8,
                     ease: TEXT_EASE,
