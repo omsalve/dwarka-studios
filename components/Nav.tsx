@@ -17,8 +17,7 @@ const CHROME_TRANSITION = [
   `background-color 600ms ${NAVBAR_EASE}`,
   `border-color 500ms ${NAVBAR_EASE}`,
   `box-shadow 500ms ${NAVBAR_EASE}`,
-  `backdrop-filter 500ms ${NAVBAR_EASE}`,
-  `-webkit-backdrop-filter 500ms ${NAVBAR_EASE}`,
+  `opacity 500ms ${NAVBAR_EASE}`,
 ].join(", ");
 
 const mix = (token: string, pct: number) =>
@@ -53,17 +52,27 @@ export function Nav() {
           samples the scene *behind* the bar, never its own text. This is the
           separation layer once you've scrolled past the hero: a faint tint + a
           real backdrop blur + a hairline edge, not a solid panel. */}
+      {/* The blur is declared once and never animated. Transitioning
+          `backdrop-filter` forces the compositor to re-sample and re-blur
+          everything behind the bar on every frame of the transition — and the
+          bar spans the full viewport width over whatever is scrolling beneath
+          it. Fading the layer's *opacity* instead gives the identical read at
+          a fraction of the cost, and `saturate` is dropped because it doubles
+          the backdrop pass for an effect nothing on this palette shows.
+
+          `willChange: opacity` keeps the blurred backdrop on its own layer so
+          the fade never triggers a re-blur at all. */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0"
         style={{
-          backgroundColor: scrolled ? mix("--navbar-bg", 76) : "transparent",
-          backdropFilter: scrolled ? "blur(16px) saturate(150%)" : "blur(0px)",
-          WebkitBackdropFilter: scrolled ? "blur(16px) saturate(150%)" : "blur(0px)",
-          borderBottom: `1px solid ${scrolled ? mix("--navbar-fg", 12) : "transparent"}`,
-          boxShadow: scrolled
-            ? `0 18px 40px -28px rgba(0,0,0,0.55), inset 0 1px 0 0 ${mix("--navbar-fg", 9)}`
-            : "none",
+          backgroundColor: mix("--navbar-bg", 76),
+          backdropFilter: "blur(16px)",
+          WebkitBackdropFilter: "blur(16px)",
+          borderBottom: `1px solid ${mix("--navbar-fg", 12)}`,
+          boxShadow: `0 18px 40px -28px rgba(0,0,0,0.55), inset 0 1px 0 0 ${mix("--navbar-fg", 9)}`,
+          opacity: scrolled ? 1 : 0,
+          willChange: "opacity",
           transition: CHROME_TRANSITION,
         }}
       />
@@ -89,7 +98,7 @@ export function Nav() {
             alt="Dwarka Studios"
             className="h-8 w-auto sm:h-9"
             style={{ filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.18))" }}
-            priority
+            preload
           />
         </a>
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { BRIDGE, clamp01, smoothstep } from "@/lib/heroBridge";
+import { onScrollFrame } from "@/lib/scrollScheduler";
 
 /* -----------------------------------------------------------------------
    HeroForgeTransition
@@ -48,19 +49,34 @@ export function HeroForgeTransition() {
 
     let W = 0;
     let H = 0;
+    // The whole wash is a single flat alpha over a fixed gradient, so the
+    // pixels only ever change when that alpha changes. Painting a full
+    // viewport of gradient for an alpha the eye cannot tell from the last one
+    // is pure waste — this is the last value actually committed.
+    let paintedAlpha = -1;
 
     function measure() {
-      W = window.innerWidth;
-      H = window.innerHeight;
+      const nextW = window.innerWidth;
+      const nextH = window.innerHeight;
+      if (nextW === W && nextH === H) return;
+      W = nextW;
+      H = nextH;
       cv.width = W;
       cv.height = H;
+      paintedAlpha = -1; // resizing clears the backing store
     }
 
-    function draw() {
-      const depth = window.scrollY / H;
-
+    /* Previously this ran synchronously inside the scroll event — and a
+       browser can dispatch several scroll events per frame, so one frame
+       could clear and gradient-fill the entire viewport three or four times
+       over. It now runs at most once per painted frame, from the shared
+       scheduler, using the scrollY that frame already read. */
+    function draw(depth: number) {
       if (depth <= BRIDGE.igniteStart || depth >= BRIDGE.clearEnd) {
-        if (cv.style.opacity !== "0") cv.style.opacity = "0";
+        if (cv.style.opacity !== "0") {
+          cv.style.opacity = "0";
+          paintedAlpha = -1;
+        }
         return;
       }
 
@@ -71,8 +87,12 @@ export function HeroForgeTransition() {
       const alpha = clamp01(ignite * (1 - part));
 
       cv.style.opacity = "1";
-      g.clearRect(0, 0, W, H);
+      // 1/255 is the finest step an 8-bit channel can represent; below that
+      // the repaint is provably invisible.
+      if (Math.abs(alpha - paintedAlpha) < 1 / 255) return;
+      paintedAlpha = alpha;
 
+      g.clearRect(0, 0, W, H);
       const grad = g.createLinearGradient(0, 0, 0, H);
       grad.addColorStop(0, `rgba(${CHAMPAGNE},${alpha})`);
       grad.addColorStop(0.5, `rgba(${GOLD_FIELD},${alpha})`);
@@ -81,23 +101,11 @@ export function HeroForgeTransition() {
       g.fillRect(0, 0, W, H);
     }
 
-    function onScroll() {
-      draw();
-    }
-    function onResize() {
-      measure();
-      draw();
-    }
-
     measure();
-    draw();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onResize, { passive: true });
-
-    return () => {
-      window.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onResize);
-    };
+    return onScrollFrame(({ depth }) => {
+      measure();
+      draw(depth);
+    });
   }, []);
 
   return (

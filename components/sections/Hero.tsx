@@ -2,9 +2,13 @@
 
 import Image from "next/image";
 import { motion, useMotionValue, useSpring, useTransform } from "motion/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CtaButton } from "@/components/CtaButton";
-import { useIntro, HERO_STILL, STILL_CLASS } from "@/components/GateIntro";
+import { onScrollFrame } from "@/lib/scrollScheduler";
+import { useDeviceBudget } from "@/lib/deviceTier";
+import { useSceneActive } from "@/lib/useVisibility";
+import { useIntro } from "@/components/GateIntro/IntroContext";
+import { HERO_STILL, STILL_CLASS } from "@/components/GateIntro/constants";
 import {
   BRIDGE,
   easeInOut,
@@ -44,8 +48,10 @@ const MOTES = [
 
 export function Hero() {
   const { introComplete, reducedMotion } = useIntro();
+  const budget = useDeviceBudget();
   const [parallaxEnabled, setParallaxEnabled] = useState(false);
 
+  const sectionRef = useRef<HTMLElement>(null);
   const rawX = useMotionValue(0);
   const rawY = useMotionValue(0);
   const x = useSpring(rawX, HERO_PARALLAX_SPRING);
@@ -61,13 +67,10 @@ export function Hero() {
   useEffect(() => {
     if (prefersReducedMotion()) return;
 
-    let ticking = false;
-
-    function apply() {
-      ticking = false;
-      const h = window.innerHeight || 1;
-      const p = window.scrollY / h;
-
+    // Shares the page's single rAF-coalesced scroll frame with the light
+    // bridge and the forge arrival (lib/scrollScheduler), so all three read
+    // the identical scrollY within a frame and the descent can never tear.
+    return onScrollFrame(({ depth: p }) => {
       // Gentle creep before the dive, then an eased push into the temple.
       const creep = smoothstep(0, BRIDGE.igniteStart, p) * 0.05;
       const dive = easeInOut(smoothstep(BRIDGE.igniteStart, BRIDGE.bloomFull, p));
@@ -75,17 +78,7 @@ export function Hero() {
 
       warm.set(smoothstep(BRIDGE.igniteStart - 0.05, BRIDGE.bloomFull, p));
       textExit.set(smoothstep(0.06, 0.42, p));
-    }
-
-    function onScroll() {
-      if (ticking) return;
-      ticking = true;
-      requestAnimationFrame(apply);
-    }
-
-    apply();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    });
   }, [diveScale, warm, textExit]);
 
   // Derived styles (pure reads off the motion values — still no re-render).
@@ -95,16 +88,35 @@ export function Hero() {
   const textBlur = useTransform(textExit, (v) => `blur(${v * 9}px)`);
 
   useEffect(() => {
-    if (!parallaxEnabled) return;
+    // A touch device has no hovering pointer to track, and a low-tier device
+    // has better uses for a full-viewport transform than a 32px drift.
+    if (!parallaxEnabled || !budget.allowPointerFx) return;
+
+    let frame = 0;
+    let pendingX = 0;
+    let pendingY = 0;
+
+    // pointermove fires far faster than the display refreshes; coalescing to
+    // one write per frame keeps a fast mouse from queueing a dozen spring
+    // updates per painted frame.
+    function flush() {
+      frame = 0;
+      rawX.set(pendingX);
+      rawY.set(pendingY);
+    }
 
     function handlePointerMove(event: PointerEvent) {
       const nx = event.clientX / window.innerWidth - 0.5;
       const ny = event.clientY / window.innerHeight - 0.5;
-      rawX.set(-nx * 2 * HERO_MAX_PARALLAX);
-      rawY.set(-ny * 2 * HERO_MAX_PARALLAX);
+      pendingX = -nx * 2 * HERO_MAX_PARALLAX;
+      pendingY = -ny * 2 * HERO_MAX_PARALLAX;
+      if (frame) return;
+      frame = requestAnimationFrame(flush);
     }
 
     function handleLeave() {
+      pendingX = 0;
+      pendingY = 0;
       rawX.set(0);
       rawY.set(0);
     }
@@ -113,15 +125,23 @@ export function Hero() {
     document.addEventListener("mouseleave", handleLeave);
 
     return () => {
+      if (frame) cancelAnimationFrame(frame);
       window.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("mouseleave", handleLeave);
     };
-  }, [parallaxEnabled, rawX, rawY]);
+  }, [parallaxEnabled, rawX, rawY, budget.allowPointerFx]);
 
-  const alive = introComplete && !reducedMotion;
+  // The ambient life is a full-viewport screen-blended conic gradient plus six
+  // blended motes, all on infinite loops. Left running they keep the
+  // compositor blending a full-screen layer forever — including the whole
+  // time the visitor is three sections further down the page. It is switched
+  // off the moment the hero leaves the viewport and back on when it returns.
+  const heroOnScreen = useSceneActive(sectionRef);
+  const alive = introComplete && !reducedMotion && heroOnScreen;
 
   return (
     <section
+      ref={sectionRef}
       id="top"
       className="relative flex min-h-[100vh] flex-col overflow-hidden bg-ink"
       data-navbar-bg="var(--ink)"
@@ -181,36 +201,35 @@ export function Hero() {
       {alive && (
         <>
           {/* God rays drifting down from the upper-left, matching the sun in
-              the plate. Barely-there, very slow. */}
-          <motion.div
+              the plate. Barely-there, very slow.
+
+              These two are plain CSS keyframe animations rather than motion
+              components: they are ambient, infinite, and never interact with
+              React state or scroll, so there is nothing for a JS animation
+              loop to buy. As CSS they run entirely on the compositor, cost no
+              main-thread work per frame, and are paused automatically by the
+              browser when the tab is backgrounded. */}
+          <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-[3] mix-blend-screen"
-            style={{
-              background:
-                "conic-gradient(from 210deg at 22% 8%, transparent 0deg, rgba(255,236,190,0.10) 12deg, transparent 26deg, rgba(255,236,190,0.07) 40deg, transparent 55deg)",
-            }}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: [0.5, 0.85, 0.5] }}
-            transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
+            className="hero-godrays pointer-events-none absolute inset-0 z-[3] mix-blend-screen"
           />
           {/* Drifting embers/motes. */}
           <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-[3] mix-blend-screen">
             {MOTES.map((m, i) => (
-              <motion.span
+              <span
                 key={i}
-                className="absolute rounded-full"
+                className="hero-mote absolute rounded-full"
                 style={{
                   left: `${m.x}%`,
                   top: `${m.y}%`,
                   width: m.size,
                   height: m.size,
-                  background:
-                    "radial-gradient(circle, rgba(255,240,210,0.95), rgba(255,205,140,0.35) 60%, transparent)",
-                  willChange: "transform, opacity",
+                  // Custom properties feed the shared keyframes, so six motes
+                  // share one animation definition instead of six timelines.
+                  ["--mote-drift" as string]: `${m.drift}px`,
+                  animationDuration: `${m.duration}s`,
+                  animationDelay: `${m.delay}s`,
                 }}
-                initial={{ opacity: 0 }}
-                animate={{ y: [0, -60, 0], x: [0, m.drift, 0], opacity: [0, 0.9, 0] }}
-                transition={{ duration: m.duration, delay: m.delay, repeat: Infinity, ease: "easeInOut" }}
               />
             ))}
           </div>

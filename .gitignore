@@ -45,3 +45,9 @@ verify-*.mjs
 
 # pre-optimization video originals (kept locally, never deployed)
 .video-originals
+
+# keep the template committed so setup stays reproducible
+!.env.example
+
+# pre-optimization image originals + retired assets (kept locally, never deployed)
+.media-originals

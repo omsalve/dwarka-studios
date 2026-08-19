@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { onScrollFrame } from "@/lib/scrollScheduler";
 
 /* -----------------------------------------------------------------------
    Ink-wash scroll transition  —  reusable between any two stacked sections
@@ -92,14 +93,24 @@ export function InkTransition({
     let W = 0, H = 0;
     let spreadStart = 0, spreadEnd = 0, fadeEnd = 0;
 
-    function measure() {
-      W = window.innerWidth;
-      H = window.innerHeight;
+    /** Re-reads the viewport; returns true if anything actually changed.
+     *  Width matters as much as height here — a window dragged narrower
+     *  without changing height still needs a new backing store, or the ink
+     *  stops spanning the frame. */
+    function measure(): boolean {
+      const nextW = window.innerWidth;
+      const nextH = window.innerHeight;
+      if (nextW === W && nextH === H) return false;
+      W = nextW;
+      H = nextH;
+      // Assigning width/height also clears the backing store, so whatever was
+      // painted is gone and the paint gate has to be reset by the caller.
       canvas.width = W;
       canvas.height = H;
       spreadStart = spreadStartVh * H;
       spreadEnd   = spreadEndVh   * H;
       fadeEnd     = fadeEndVh     * H;
+      return true;
     }
 
     function drawInk(spreadP: number) {
@@ -149,15 +160,30 @@ export function InkTransition({
       ctx.fillRect(0, edgeY - glowH, W, glowH + 22);
     }
 
-    function update() {
-      const sy = window.scrollY;
+    // Resolved once, not re-queried on every scroll event. getElementById is
+    // cheap but it was running several times per frame for the life of the
+    // page; the veil never moves.
+    let veil: HTMLElement | null = null;
+    function veilElement() {
+      if (!veil) veil = document.getElementById(veilId) as HTMLElement | null;
+      return veil;
+    }
 
+    // The ink polygon is a 90-segment path plus a gradient fill across the
+    // whole viewport. Quantising the spread to ~1/600 of its range means a
+    // frame that has not moved the edge by even a third of a pixel does not
+    // redraw at all — invisible, and it removes the majority of the paints
+    // during a slow scrub.
+    let paintedStep = -1;
+    const STEPS = 600;
+
+    function update(sy: number) {
       // ── veil: covers this section's content from inside its own stacking
       // context. GPU-composited elements (Framer Motion divs, WebGL canvases)
       // can escape CSS z-index ordering. The veil (z-30 within the sticky
       // wrapper) is guaranteed to sit above all of this section's children,
       // hiding them before the ink reaches them — no compositor fights needed.
-      const veil = document.getElementById(veilId) as HTMLElement | null;
+      const veil = veilElement();
       if (veil) {
         if (sy <= spreadStart) {
           veil.style.opacity = "0";
@@ -176,35 +202,36 @@ export function InkTransition({
 
       // ── Canvas ink ────────────────────────────────────────────────────
       if (sy <= spreadStart || sy >= fadeEnd) {
-        if (canvas.style.opacity !== "0") canvas.style.opacity = "0";
+        if (canvas.style.opacity !== "0") {
+          canvas.style.opacity = "0";
+          paintedStep = -1;
+        }
         return;
       }
 
+      // The fade phase only changes the canvas's *opacity* — a compositor
+      // property. The ink underneath is already at full coverage, so it must
+      // not be repainted for every step of the fade.
+      const spread = sy <= spreadEnd ? (sy - spreadStart) / (spreadEnd - spreadStart) : 1;
+
       if (sy <= spreadEnd) {
-        const p = (sy - spreadStart) / (spreadEnd - spreadStart);
         canvas.style.opacity = "1";
-        drawInk(p);
       } else {
-        // Fade phase: ink is at full coverage, canvas opacity decays
         const fp = (sy - spreadEnd) / (fadeEnd - spreadEnd);
         canvas.style.opacity = String(Math.max(0, 1 - Math.pow(fp, 1.6)));
-        drawInk(1);
       }
-    }
 
-    function onResize() {
-      measure();
-      update();
+      const step = Math.round(spread * STEPS);
+      if (step === paintedStep) return;
+      paintedStep = step;
+      drawInk(spread);
     }
 
     measure();
-    update();
-    window.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("resize", onResize, { passive: true });
-    return () => {
-      window.removeEventListener("scroll", update);
-      window.removeEventListener("resize", onResize);
-    };
+    return onScrollFrame(({ y }) => {
+      if (measure()) paintedStep = -1;
+      update(y);
+    });
   }, [color, glowColor, veilId, spreadStartVh, spreadEndVh, fadeEndVh]);
 
   return (

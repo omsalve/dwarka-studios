@@ -67,14 +67,20 @@ function RevealChar({
   const end = Math.min(start + LETTER_WINDOW, REVEAL_END);
 
   // A single eased, clamped 0→1 value per letter — reading it directly as
-  // opacity and deriving blur/offset from it keeps every property in lock
-  // step and avoids ever animating back out once a letter has settled in.
+  // opacity and deriving the offset from it keeps every property in lock step
+  // and avoids ever animating back out once a letter has settled in.
   const t = useTransform(progress, (p) => {
     const local = end > start ? (p - start) / (end - start) : 1;
     return easeOutSoft(clamp01(local));
   });
   const y = useTransform(t, (v) => (1 - v) * 12);
-  const filter = useTransform(t, (v) => `blur(${(1 - v) * 8}px)`);
+  // Scale carries the softness that `blur()` used to. Both paragraphs are
+  // ~530 characters, and an animating CSS filter promotes its element to its
+  // own compositor layer for the duration — so the blur variant asked the
+  // browser to hold and re-rasterise five hundred separate layers through a
+  // scrub. Transform and opacity composite without promotion, and a letter
+  // rising from 0.88 scale at 0 opacity reads as the same "settling in".
+  const scale = useTransform(t, (v) => 0.88 + v * 0.12);
 
   return (
     <motion.span
@@ -82,8 +88,8 @@ function RevealChar({
         display: "inline-block",
         opacity: t,
         y,
-        filter,
-        willChange: "transform, opacity, filter",
+        scale,
+        willChange: "transform, opacity",
       }}
     >
       {char}

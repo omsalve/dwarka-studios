@@ -105,7 +105,7 @@ export default function ContactPage() {
               </div>
             </Reveal>
 
-            {/* Right — the (non-functional) enquiry form. */}
+            {/* Right — the enquiry form, wired to the submitEnquiry action. */}
             <Reveal delay={0.1}>
               <ContactForm />
             </Reveal>

@@ -1,5 +1,5 @@
 import { CtaButton } from "@/components/CtaButton";
-import { FoundersNoteBook } from "@/components/FoundersNoteBook";
+import { DeferredBook } from "@/components/scenes/DeferredBook";
 import { Reveal } from "@/components/Reveal";
 
 export function FoundersNote() {
@@ -9,7 +9,7 @@ export function FoundersNote() {
       data-navbar-bg="var(--bg-warm)"
       data-navbar-fg="var(--ink)"
     >
-      <FoundersNoteBook />
+      <DeferredBook />
 
       {/* The letter is painted onto the book's 3D pages for the visual
           experience; this mirrors it as real text for screen readers and

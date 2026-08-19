@@ -6,8 +6,14 @@ import { useEffect } from "react";
  * Fine-grained thresholds so the observer callback fires often enough to
  * track which section occupies the most of the viewport as the user
  * scrolls, without ever attaching a scroll listener.
+ *
+ * 12 rather than 24: every step is a main-thread callback that loops the
+ * occupancy map, and with six observed sections that was up to 144 callbacks
+ * across a full-page scroll. The winner it computes only ever feeds a CSS
+ * colour transition that takes 500ms to play out, so resolution beyond ~8% of
+ * a viewport is measuring something the eye cannot see.
  */
-const THRESHOLD_STEPS = 24;
+const THRESHOLD_STEPS = 12;
 const THRESHOLDS = Array.from({ length: THRESHOLD_STEPS + 1 }, (_, i) => i / THRESHOLD_STEPS);
 
 const MIN_VIEWPORT_OCCUPANCY = 0.05;

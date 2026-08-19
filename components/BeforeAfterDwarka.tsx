@@ -15,7 +15,11 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import { AnimatePresence, motion } from "motion/react";
 import * as THREE from "three";
+import { AdaptiveResolution } from "@/components/three/AdaptiveResolution";
 import { useIntro } from "@/components/GateIntro/IntroContext";
+import { useDeviceBudget, type DeviceBudget } from "@/lib/deviceTier";
+import { onScrollFrame } from "@/lib/scrollScheduler";
+import { useSceneActive } from "@/lib/useVisibility";
 import { EASE } from "@/lib/motion";
 import {
   BRIDGE,
@@ -23,6 +27,26 @@ import {
   prefersReducedMotion,
   smoothstep,
 } from "@/lib/heroBridge";
+
+/* ----------------------------------------------------------------------- */
+/* Density budget                                                          */
+/*                                                                         */
+/* Particle counts at full quality. Everything below is multiplied by the  */
+/* device budget's particleScale, so a weak GPU renders the same scene at  */
+/* a lower density rather than a different scene — the dust still swirls,  */
+/* the stars still twinkle, there are simply fewer of them. Each is        */
+/* floored so no field can ever thin out to nothing.                       */
+/* ----------------------------------------------------------------------- */
+
+const DENSITY = {
+  starDust: 900,
+  dust: 220,
+  stars: 260,
+} as const;
+
+function density(base: number, scale: number) {
+  return Math.max(48, Math.round(base * scale));
+}
 
 /* ----------------------------------------------------------------------- */
 /* Shared time source                                                      */
@@ -618,6 +642,7 @@ function StarDustAura({
 }
 
 function AfterOrb({
+  starDustCount,
   position,
   hovered,
   setHovered,
@@ -628,6 +653,7 @@ function AfterOrb({
   timeRef,
   introRef,
 }: {
+  starDustCount: number;
   position: [number, number, number];
   hovered: boolean;
   setHovered: (v: boolean) => void;
@@ -698,7 +724,7 @@ function AfterOrb({
           does all its own motion in the shader, so it's independent of the
           orb's spin and selection scale. No halo, no rings. */}
       <StarDustAura
-        count={900}
+        count={starDustCount}
         boostUniform={coreUniforms.uBoost}
         dimUniform={coreUniforms.uDim}
         timeRef={timeRef}
@@ -871,8 +897,13 @@ function EnergyBridge({
 /* Dust particles                                                          */
 /* ----------------------------------------------------------------------- */
 
-function DustField({ timeRef }: { timeRef: React.RefObject<THREE.Timer> }) {
-  const count = 220;
+function DustField({
+  timeRef,
+  count,
+}: {
+  timeRef: React.RefObject<THREE.Timer>;
+  count: number;
+}) {
   const pointsRef = useRef<THREE.Points>(null);
 
   const { positions, seeds } = useMemo(() => {
@@ -887,33 +918,37 @@ function DustField({ timeRef }: { timeRef: React.RefObject<THREE.Timer> }) {
     return { positions, seeds };
   }, [count]);
 
-  const base = useRef(positions.slice());
+  const uniforms = useMemo(() => ({ uTime: { value: 0 } }), []);
 
+  // The drift used to be a JS loop that rewrote all count*3 floats and
+  // re-uploaded the entire position buffer every frame. It is a pure function
+  // of (base position, seed, time), so it belongs in the vertex shader: the
+  // buffer is now uploaded once at setup and never touched again.
   useFrame(() => {
-    if (!pointsRef.current) return;
-    const posAttr = pointsRef.current.geometry.attributes.position as THREE.BufferAttribute;
-    const t = timeRef.current.getElapsed();
-    for (let i = 0; i < count; i++) {
-      posAttr.array[i * 3] = base.current[i * 3] + Math.sin(t * 0.05 + seeds[i]) * 0.4;
-      posAttr.array[i * 3 + 1] =
-        base.current[i * 3 + 1] + Math.sin(t * 0.08 + seeds[i] * 1.7) * 0.3 + ((t * 0.01) % 6) - 3;
-      posAttr.array[i * 3 + 2] = base.current[i * 3 + 2] + Math.cos(t * 0.04 + seeds[i]) * 0.3;
-    }
-    posAttr.needsUpdate = true;
+    uniforms.uTime.value = timeRef.current.getElapsed();
   });
 
   return (
     <points ref={pointsRef} renderOrder={4}>
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        <bufferAttribute attach="attributes-aSeed" args={[seeds, 1]} />
       </bufferGeometry>
       <shaderMaterial
         transparent
         depthWrite={false}
         blending={THREE.AdditiveBlending}
+        uniforms={uniforms}
         vertexShader={`
+          attribute float aSeed;
+          uniform float uTime;
           void main() {
-            vec4 mv = modelViewMatrix * vec4(position, 1.0);
+            float t = uTime;
+            vec3 p = position;
+            p.x += sin(t * 0.05 + aSeed) * 0.4;
+            p.y += sin(t * 0.08 + aSeed * 1.7) * 0.3 + mod(t * 0.01, 6.0) - 3.0;
+            p.z += cos(t * 0.04 + aSeed) * 0.3;
+            vec4 mv = modelViewMatrix * vec4(p, 1.0);
             gl_PointSize = (1.6 / -mv.z) * 3.0;
             gl_Position = projectionMatrix * mv;
           }
@@ -942,11 +977,12 @@ function DustField({ timeRef }: { timeRef: React.RefObject<THREE.Timer> }) {
 function Starfield({
   timeRef,
   boostRef,
+  count,
 }: {
   timeRef: React.RefObject<THREE.Timer>;
   boostRef: React.RefObject<number>;
+  count: number;
 }) {
-  const count = 260;
   const pointsRef = useRef<THREE.Points>(null);
 
   const { positions, seeds, twinkleSpeeds } = useMemo(() => {
@@ -971,26 +1007,22 @@ function Starfield({
     []
   );
 
+  // Twinkle is 0.5 + 0.5*sin(t*speed + seed): per-particle constants and time.
+  // The seed and speed now ship once as static attributes and the sine happens
+  // in the vertex shader, replacing a per-frame JS loop plus a full attribute
+  // re-upload with two uniform writes.
   useFrame(() => {
-    const t = timeRef.current.getElapsed();
     const delta = timeRef.current.getDelta();
-    uniforms.uTime.value = t;
+    uniforms.uTime.value = timeRef.current.getElapsed();
     uniforms.uBoost.value = THREE.MathUtils.damp(uniforms.uBoost.value, boostRef.current ?? 0, 2.5, delta);
-
-    if (pointsRef.current) {
-      const sizes = pointsRef.current.geometry.attributes.twinkle as THREE.BufferAttribute;
-      for (let i = 0; i < count; i++) {
-        sizes.array[i] = 0.5 + 0.5 * Math.sin(t * twinkleSpeeds[i] + seeds[i]);
-      }
-      sizes.needsUpdate = true;
-    }
   });
 
   return (
     <points ref={pointsRef} renderOrder={5}>
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-        <bufferAttribute attach="attributes-twinkle" args={[new Float32Array(count), 1]} />
+        <bufferAttribute attach="attributes-aSeed" args={[seeds, 1]} />
+        <bufferAttribute attach="attributes-aSpeed" args={[twinkleSpeeds, 1]} />
       </bufferGeometry>
       <shaderMaterial
         transparent
@@ -998,11 +1030,13 @@ function Starfield({
         blending={THREE.AdditiveBlending}
         uniforms={uniforms}
         vertexShader={`
-          attribute float twinkle;
+          attribute float aSeed;
+          attribute float aSpeed;
+          uniform float uTime;
           uniform float uBoost;
           varying float vTwinkle;
           void main() {
-            vTwinkle = twinkle;
+            vTwinkle = 0.5 + 0.5 * sin(uTime * aSpeed + aSeed);
             vec4 mv = modelViewMatrix * vec4(position, 1.0);
             // Fixed pixel size (not distance-attenuated): the stars all sit
             // in roughly the same far depth range, and dividing by camera
@@ -1210,10 +1244,12 @@ function Scene({
   selected,
   setSelected,
   introRef,
+  budget,
 }: {
   selected: Selected;
   setSelected: (v: Selected) => void;
   introRef: React.RefObject<number>;
+  budget: DeviceBudget;
 }) {
   const timeRef = useSharedTimer();
 
@@ -1280,8 +1316,14 @@ function Scene({
           each fragment shader below, plus the two dynamic pointLights
           used for the glow flicker. */}
 
-      <Starfield timeRef={timeRef} boostRef={starBoostRef} />
-      <DustField timeRef={timeRef} />
+      <AdaptiveResolution maxDpr={budget.maxDpr} />
+
+      <Starfield
+        timeRef={timeRef}
+        boostRef={starBoostRef}
+        count={density(DENSITY.stars, budget.particleScale)}
+      />
+      <DustField timeRef={timeRef} count={density(DENSITY.dust, budget.particleScale)} />
 
       <EnergyBridge
         start={[beforePos[0] + 0.85, 0, 0]}
@@ -1304,6 +1346,7 @@ function Scene({
       />
 
       <AfterOrb
+        starDustCount={density(DENSITY.starDust, budget.particleScale)}
         position={afterPos}
         hovered={hoverAfter}
         setHovered={setHoverAfter}
@@ -1455,6 +1498,8 @@ function SelectionPanel({
 
 export default function BeforeAfterDwarka() {
   const [selected, setSelected] = useState<Selected>(null);
+  const budget = useDeviceBudget();
+  const shellRef = useRef<HTMLDivElement>(null);
 
   // The splash sits on top of this section for the whole intro, but r3f's
   // default frameloop renders regardless of visibility — a continuous
@@ -1470,44 +1515,61 @@ export default function BeforeAfterDwarka() {
   // never triggers a React re-render of the WebGL tree.
   const introRef = useRef(1);
 
+  // One shared rAF-coalesced scroll frame for the whole page (see
+  // lib/scrollScheduler) rather than this component's own listener + rAF —
+  // the hero dive, the light bridge and this arrival all now read the *same*
+  // scrollY within a frame, so they can never disagree about the depth.
   useEffect(() => {
     if (prefersReducedMotion()) {
       introRef.current = 1;
       return;
     }
-
-    let ticking = false;
-    function apply() {
-      ticking = false;
-      const h = window.innerHeight || 1;
-      const depth = window.scrollY / h;
+    return onScrollFrame(({ depth }) => {
       introRef.current = smoothstep(BRIDGE.arriveStart, BRIDGE.arriveEnd, depth);
-    }
-    function onScroll() {
-      if (ticking) return;
-      ticking = true;
-      requestAnimationFrame(apply);
-    }
-
-    apply();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    });
   }, []);
+
+  // Rendering only ever costs anything while the forge is genuinely being
+  // looked at: on screen, in a foregrounded tab, and past the intro splash.
+  // Previously this loop ran continuously — through the whole splash, and all
+  // the way down the services deck and founder's note — burning a full-screen
+  // fbm shader pass per frame for a scene nobody could see.
+  const active = useSceneActive(shellRef, introComplete);
 
   return (
     <div
+      ref={shellRef}
       style={{ position: "relative", width: "100%", height: "100vh", background: "#6a5330" }}
       data-navbar-bg="#d9be86"
       data-navbar-fg="#2a1e0d"
     >
       <Canvas
         camera={{ position: [0, 0.1, 5.2], fov: 45, near: 0.1, far: 50 }}
-        frameloop={introComplete ? "always" : "never"}
-        dpr={[1, 2]}
-        gl={{ antialias: true, powerPreference: "high-performance" }}
+        frameloop={active ? "always" : "never"}
+        // The ceiling only; AdaptiveResolution inside the scene walks the real
+        // pixel ratio up and down from here based on measured frame time.
+        dpr={[1, budget.maxDpr]}
+        gl={{
+          antialias: budget.antialias,
+          powerPreference: budget.tier === "low" ? "default" : "high-performance",
+          // alpha stays on (r3f's default). An opaque buffer would save a
+          // compositor blend, but this canvas can exist for a frame or two
+          // before the visibility gate lets it render — on a reload that lands
+          // mid-page, say — and an opaque un-rendered buffer is BLACK, which
+          // would flash over the gold ground behind it. Transparent means an
+          // unrendered frame simply shows that ground.
+          alpha: true,
+          // Nothing in this scene uses the stencil buffer.
+          stencil: false,
+        }}
         style={{ filter: "contrast(1.03) saturate(1.05)" }}
       >
-        <Scene selected={selected} setSelected={setSelected} introRef={introRef} />
+        <Scene
+          selected={selected}
+          setSelected={setSelected}
+          introRef={introRef}
+          budget={budget}
+        />
       </Canvas>
       <div
         style={{

@@ -3,7 +3,7 @@
 import { useRef } from "react";
 import { CtaButton } from "@/components/CtaButton";
 import { Reveal } from "@/components/Reveal";
-import { ScrollTextReveal } from "@/components/ScrollTextReveal";
+import { DeferredTextReveal } from "@/components/DeferredTextReveal";
 
 export function ClosingBridge() {
   const sectionRef = useRef<HTMLElement>(null);
@@ -16,7 +16,7 @@ export function ClosingBridge() {
       data-navbar-fg="var(--ink)"
     >
       <div className="mx-auto max-w-3xl">
-        <ScrollTextReveal
+        <DeferredTextReveal
           as="p"
           className="font-display text-2xl leading-relaxed text-ink sm:text-3xl"
           text="The past was built by master craftsmen. The future will be built by intelligent ones. Dwarka Studios is where they meet — ancient storytelling, modern intelligence, and immersive technology, engineered into experiences worth remembering."

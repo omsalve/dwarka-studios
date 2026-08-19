@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import Image from "next/image";
 import {
   motion,
@@ -11,6 +11,8 @@ import {
   type MotionValue,
 } from "motion/react";
 import { EASE } from "@/lib/motion";
+import { useDeviceBudget } from "@/lib/deviceTier";
+import { onScrollFrame } from "@/lib/scrollScheduler";
 
 type Accent = "gold" | "peacock" | "ink" | "spectrum";
 
@@ -29,7 +31,7 @@ const SERVICES: Service[] = [
     description:
       "Living, playable worlds for entertainment and training — every mechanic, frame, and decision engineered to be believed.",
     accent: "gold",
-    image: "/images/services/GamingDS.png",
+    image: "/images/services/GamingDS.webp",
   },
   {
     n: "02",
@@ -37,7 +39,7 @@ const SERVICES: Service[] = [
     description:
       "Turning ideas and raw data into intelligent, stunning visuals — explorable, production-grade, and fast.",
     accent: "peacock",
-    image: "/images/services/AI%20Visualisation.png",
+    image: "/images/services/AI%20Visualisation.webp",
   },
   {
     n: "03",
@@ -45,7 +47,7 @@ const SERVICES: Service[] = [
     description:
       "Cinematic effects and storytelling that move audiences, frame by intentional frame.",
     accent: "ink",
-    image: "/images/services/VFX.png",
+    image: "/images/services/VFX.webp",
   },
   {
     n: "04",
@@ -53,7 +55,7 @@ const SERVICES: Service[] = [
     description:
       "Immersive experiences across the full spectrum of reality — physical, augmented, and fully virtual.",
     accent: "spectrum",
-    image: "/images/services/ARVRMRXR.png",
+    image: "/images/services/ARVRMRXR.webp",
   },
 ];
 
@@ -137,6 +139,15 @@ const RECEDE_SCRIM = [0, 0, 0.34, 0.5, 0.62];
 // highest, the climbing card is mid-air, the receded cards press into the deck.
 const RECEDE_LIFT = [0.6, 1, 0.5, 0.3, 0.16];
 
+// The two ends of that elevation, pre-rasterised. Cross-fading these with
+// opacity reproduces the old continuously-interpolated box-shadow closely
+// enough that the difference is not perceptible, without ever repainting.
+// Values are the old formula evaluated at lift = 0.16 and lift = 1.
+const SETTLED_SHADOW =
+  "0 1.5px 3px rgba(22,20,15,0.048), 0 14.8px 39.6px -19px rgba(22,20,15,0.191)";
+const FLOATING_SHADOW =
+  "0 4px 8px rgba(22,20,15,0.09), 0 40px 90px -14px rgba(22,20,15,0.46)";
+
 function useCardDepth(progress: MotionValue<number>, index: number, total: number) {
   const segLen = 1 / total;
   const stops: number[] = [];
@@ -192,19 +203,22 @@ function StackCard({
 
   // Layered drop shadow driven by elevation: a tight contact shadow plus a
   // wide, soft ambient one that swells as the card floats to the front.
-  const boxShadow = useTransform(
-    lift,
-    (l) =>
-      `0 ${(1 + l * 3).toFixed(1)}px ${(2 + l * 6).toFixed(1)}px rgba(22,20,15,${(
-        0.04 + l * 0.05
-      ).toFixed(3)}), 0 ${(10 + l * 30).toFixed(1)}px ${(30 + l * 60).toFixed(
-        1
-      )}px -${(14 + (1 - l) * 6).toFixed(1)}px rgba(22,20,15,${(0.14 + l * 0.32).toFixed(
-        3
-      )})`
-  );
+  //
+  // This used to be a single motion value writing `box-shadow` inline on every
+  // frame. box-shadow is a *paint* property — rewriting it forces the browser
+  // to re-rasterise the card and a 90px blur skirt around it, four cards at a
+  // time, for the entire length of a spring. It was the most expensive thing
+  // on this section by a wide margin.
+  //
+  // The same elevation now cross-fades two statically-rasterised shadow layers
+  // (see SETTLED_SHADOW / FLOATING_SHADOW below). Only `opacity` animates, the
+  // layers are painted once, and the whole deck runs on the compositor.
+  const floatShadowOpacity = useTransform(lift, [RECEDE_LIFT[4], 1], [0, 1]);
 
   const accent = ACCENT[service.accent];
+  // Touch devices have no hovering pointer to track at all, and on a low-tier
+  // device the sheen's full-card gradient repaint is not a good trade.
+  const pointerFx = useDeviceBudget().allowPointerFx;
 
   // --- Restrained pointer-driven light + tilt, only on the active face ---
   // `activeness` is 1 at depth 0 and falls to 0 as the card leaves the front,
@@ -236,15 +250,36 @@ function StackCard({
     ([h, a]: number[]) => h * a * 0.5
   );
 
+  // getBoundingClientRect inside a pointermove handler forces a synchronous
+  // layout on *every* event — up to ~120 a second on a high-polling mouse.
+  // The card's box is measured once on enter and reused for the hover.
+  //
+  // It does move, though: the whole deck translates, scales and rotates with
+  // the scroll. So the measurement is invalidated once per scroll frame and
+  // re-taken lazily on the next pointer move — one layout read per frame at
+  // worst, instead of one per event.
+  const rectRef = useRef<DOMRect | null>(null);
+  useEffect(() => {
+    if (!pointerFx) return;
+    return onScrollFrame(() => {
+      rectRef.current = null;
+    });
+  }, [pointerFx]);
+
   function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
+    if (!pointerFx) return;
+    const rect = rectRef.current ?? event.currentTarget.getBoundingClientRect();
+    rectRef.current = rect;
     pxRaw.set((event.clientX - rect.left) / rect.width - 0.5);
     pyRaw.set((event.clientY - rect.top) / rect.height - 0.5);
   }
-  function handlePointerEnter() {
+  function handlePointerEnter(event: React.PointerEvent<HTMLDivElement>) {
+    if (!pointerFx) return;
+    rectRef.current = event.currentTarget.getBoundingClientRect();
     hoverRaw.set(1);
   }
   function handlePointerLeave() {
+    rectRef.current = null;
     hoverRaw.set(0);
     pxRaw.set(0);
     pyRaw.set(0);
@@ -256,9 +291,9 @@ function StackCard({
       className="absolute inset-0 flex items-center justify-center px-4 sm:px-6"
     >
       <motion.div
-        onPointerMove={handlePointerMove}
-        onPointerEnter={handlePointerEnter}
-        onPointerLeave={handlePointerLeave}
+        onPointerMove={pointerFx ? handlePointerMove : undefined}
+        onPointerEnter={pointerFx ? handlePointerEnter : undefined}
+        onPointerLeave={pointerFx ? handlePointerLeave : undefined}
         style={{ rotateX: tiltX, rotateY: tiltY, scale: hoverScale, transformPerspective: 1400 }}
         className="relative w-full max-w-[1080px]"
       >
@@ -272,8 +307,21 @@ function StackCard({
           className="absolute -inset-10 -z-10 rounded-[52px]"
         />
 
+        {/* The two elevation layers. They sit outside the card's
+            `overflow-hidden` box (which would clip an outer shadow) and behind
+            it, exactly where the animated box-shadow used to be drawn. */}
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 -z-[1] rounded-[28px]"
+          style={{ boxShadow: SETTLED_SHADOW }}
+        />
+        <motion.span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 -z-[1] rounded-[28px]"
+          style={{ boxShadow: FLOATING_SHADOW, opacity: floatShadowOpacity }}
+        />
+
         <motion.div
-          style={{ boxShadow }}
           className={`relative flex flex-col overflow-hidden rounded-[28px] border ${accent.ring} md:h-[68vh] md:min-h-[420px] md:max-h-[560px] md:flex-row`}
         >
           {/* Base surface — a subtly top-lit parchment, giving the card a

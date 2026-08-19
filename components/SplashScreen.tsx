@@ -31,10 +31,9 @@
    watcher is throttled (background tab) and misses the lead window.
    ----------------------------------------------------------------------- */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-
-const VIDEO_ONE = "/videos/video1x.mp4";
-const VIDEO_TWO = "/videos/video2x.mp4";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDeviceBudget } from "@/lib/deviceTier";
+import { VIDEOS, sourcesFor, targetHeight } from "@/lib/mediaManifest";
 
 /** Dissolve length. Also drives the inline `transitionDuration` below. */
 const CROSSFADE_MS = 500;
@@ -56,6 +55,40 @@ interface Props {
 export function SplashScreen({ onComplete, withSound = false }: Props) {
   const oneRef = useRef<HTMLVideoElement>(null);
   const twoRef = useRef<HTMLVideoElement>(null);
+  const budget = useDeviceBudget();
+
+  /* --- Which encode this visitor gets ----------------------------------
+     Both clips are full-frame background footage with no fine detail or
+     text, which is exactly the content where a lower rung is hardest to
+     notice and cheapest to ship. The rung is chosen from the panel's real
+     resolution and the connection, never from the file that happens to
+     exist — see lib/mediaManifest. Until `npm run media` has produced the
+     smaller encodes there is only one rung, and this resolves to it. */
+  const rung = useMemo(() => {
+    if (typeof window === "undefined") return 1080;
+    return targetHeight({
+      tier: budget.tier,
+      frugalNetwork: budget.frugalNetwork,
+      viewportHeight: window.innerHeight,
+      dpr: window.devicePixelRatio || 1,
+    });
+  }, [budget.tier, budget.frugalNetwork]);
+
+  const sourcesOne = useMemo(() => sourcesFor(VIDEOS.splashOne, rung), [rung]);
+  const sourcesTwo = useMemo(() => sourcesFor(VIDEOS.splashTwo, rung), [rung]);
+
+  /* The rung is keyed onto the elements below, and that is load-bearing.
+     A <video> picks its source ONCE, when it is first attached. Swapping its
+     <source> children afterwards changes nothing unless load() is called
+     again — so without this, the server-rendered 1080 ladder would win on
+     every device and the whole adaptive selection would be decorative.
+
+     The server has no window to measure, so it always emits the 1080 rung.
+     On a desktop that is also what the client concludes, the key is
+     unchanged, and React reuses the element with no interruption. On a phone
+     or a throttled connection the key changes on the first client commit —
+     before any byte of video has been requested in earnest — and the element
+     remounts onto the correct ladder. */
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [oneRetired, setOneRetired] = useState(false); // video 1 fully covered
@@ -109,6 +142,13 @@ export function SplashScreen({ onComplete, withSound = false }: Props) {
     if (two.readyState >= 2) prime();
     else two.addEventListener("loadeddata", prime, { once: true });
   }, []);
+
+  /* --- A rung change remounts both elements ---------------------------
+     Any priming done on the previous pair does not carry over, so the arming
+     latch has to be released with them. */
+  useEffect(() => {
+    armedRef.current = false;
+  }, [rung]);
 
   /* --- No scrolling behind the splash -------------------------------- */
   useEffect(() => {
@@ -234,19 +274,28 @@ export function SplashScreen({ onComplete, withSound = false }: Props) {
       {!oneRetired && (
         <video
           {...shared}
+          key={rung}
           ref={oneRef}
-          src={VIDEO_ONE}
+          poster={VIDEOS.splashOne.poster}
           onLoadedData={pinFirstFrame}
           onCanPlayThrough={armSecondVideo}
           onEnded={beginHandoff}
-        />
+        >
+          {/* Ordered smallest-adequate-first by the manifest: the browser
+              takes the first codec it can decode, so AV1/VP9 browsers get the
+              small file and everything else falls through to H.264. */}
+          {sourcesOne.map((v) => (
+            <source key={v.src} src={v.src} type={v.type} />
+          ))}
+        </video>
       )}
 
       {/* Video 2 — top layer. The only thing that animates. */}
       <video
         {...shared}
+        key={rung}
         ref={twoRef}
-        src={VIDEO_TWO}
+        poster={VIDEOS.splashTwo.poster}
         // Overrides the shared "auto": armed by hand once video 1 is safe.
         preload="none"
         onEnded={onComplete}
@@ -254,7 +303,11 @@ export function SplashScreen({ onComplete, withSound = false }: Props) {
           handedOff ? "opacity-100" : "opacity-0"
         }`}
         style={{ transitionDuration: `${CROSSFADE_MS}ms`, willChange: "opacity" }}
-      />
+      >
+        {sourcesTwo.map((v) => (
+          <source key={v.src} src={v.src} type={v.type} />
+        ))}
+      </video>
 
       {/* The door. Stays mounted through the whole hover dance — it is what
           detects the pointer leaving — and is dropped once the handoff

@@ -31,8 +31,6 @@ export type ScrollTextRevealProps = {
   end?: string;
   /** Opacity of a letter before it's been reached by the reveal. */
   restOpacity?: number;
-  /** Brightness (0–100) of a letter before it's been reached by the reveal. */
-  restBrightness?: number;
   /** Per-letter catch-up tween duration, in seconds. */
   duration?: number;
   /** Per-letter catch-up ease. A slight overshoot ease reads as a light bounce. */
@@ -50,8 +48,10 @@ export function ScrollTextReveal({
   scrollTarget,
   start = DEFAULT_START,
   end = DEFAULT_END,
-  restOpacity = 0.15,
-  restBrightness = 45,
+  // Was 0.15 alongside a brightness(45%) filter. Dropping the filter (see
+  // below) makes the resting letters read slightly lighter, so the resting
+  // opacity comes down to match what the pair used to look like together.
+  restOpacity = 0.12,
   duration = 0.3,
   ease = "back.out(1.7)",
 }: ScrollTextRevealProps) {
@@ -75,14 +75,20 @@ export function ScrollTextReveal({
     ).matches;
 
     if (prefersReducedMotion) {
-      gsap.set(letters, { opacity: 1, filter: "brightness(100%)" });
+      gsap.set(letters, { opacity: 1 });
       return;
     }
 
-    gsap.set(letters, {
-      opacity: restOpacity,
-      filter: `brightness(${restBrightness}%)`,
-    });
+    /* Opacity only, deliberately.
+
+       This reveal used to animate `filter: brightness()` on every character
+       alongside the opacity. A CSS filter promotes its element to its own
+       compositor layer for the duration of the animation — so a 240-character
+       paragraph became 240 layers, each with its own texture, all being
+       re-rasterised as the scrub moved through them. Opacity alone composites
+       on the GPU with no promotion and no rasterisation, and on ink-coloured
+       text over parchment the two look the same. */
+    gsap.set(letters, { opacity: restOpacity });
 
     let revealedCount = 0;
 
@@ -100,7 +106,6 @@ export function ScrollTextReveal({
           const revealed = i < index;
           gsap.to(letters[i], {
             opacity: revealed ? 1 : restOpacity,
-            filter: `brightness(${revealed ? 100 : restBrightness}%)`,
             duration,
             ease,
             overwrite: "auto",
@@ -115,7 +120,7 @@ export function ScrollTextReveal({
       trigger.kill();
       gsap.killTweensOf(letters);
     };
-  }, [text, scrollTarget, start, end, restOpacity, restBrightness, duration, ease]);
+  }, [text, scrollTarget, start, end, restOpacity, duration, ease]);
 
   return (
     <Tag ref={containerRef as never} className={className} aria-label={text}>

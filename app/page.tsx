@@ -1,22 +1,24 @@
-import BeforeAfterDwarka from "@/components/BeforeAfterDwarka";
-import { IntroProvider } from "@/components/GateIntro";
+/* Import discipline matters more than usual on this route: every "use client"
+   module named here lands in the landing page's client bundle whether or not
+   it is rendered. Six section components (AICore, BeforeAfter, MissionVision,
+   WhatSetsUsApart, WhoWeAre, WhyDwarka) were imported and never used, and
+   IntroProvider was pulled through the GateIntro barrel, which dragged the
+   entire superseded three-video gate intro along with it. Both are fixed
+   below: nothing is imported here that the page does not render, and the
+   provider comes straight from the module that defines it. */
 import { Footer } from "@/components/Footer";
+import { IntroProvider } from "@/components/GateIntro/IntroContext";
 import { HeroForgeTransition } from "@/components/HeroForgeTransition";
 import { IntroAutoScroll } from "@/components/IntroAutoScroll";
 import { InkTransition } from "@/components/InkTransition";
 import { Nav } from "@/components/Nav";
 import { ScrollProgress } from "@/components/ScrollProgress";
 import { SplashIntro } from "@/components/SplashIntro";
-import { AICore } from "@/components/sections/AICore";
-import { BeforeAfter } from "@/components/sections/BeforeAfter";
+import { DeferredForge } from "@/components/scenes/DeferredForge";
 import { ClosingBridge } from "@/components/sections/ClosingBridge";
 import { FoundersNote } from "@/components/sections/FoundersNote";
 import { Hero } from "@/components/sections/Hero";
-import { MissionVision } from "@/components/sections/MissionVision";
 import { ServicesStack } from "@/components/sections/ServicesStack";
-import { WhatSetsUsApart } from "@/components/sections/WhatSetsUsApart";
-import { WhoWeAre } from "@/components/sections/WhoWeAre";
-import { WhyDwarka } from "@/components/sections/WhyDwarka";
 
 export default function Home() {
   return (
@@ -56,7 +58,7 @@ export default function Home() {
         </div>
         <div style={{ position: "relative", height: "180vh" }}>
           <div style={{ position: "sticky", top: 0, height: "100vh", overflow: "hidden" }}>
-            <BeforeAfterDwarka />
+            <DeferredForge />
             <div
               id="before-after-veil"
               aria-hidden="true"
