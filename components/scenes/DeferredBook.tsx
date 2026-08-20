@@ -29,7 +29,7 @@
    ----------------------------------------------------------------------- */
 
 import dynamic from "next/dynamic";
-import { useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { FoundersNoteLetter } from "@/components/FoundersNoteLetter";
 import { useDeviceBudget } from "@/lib/deviceTier";
 import { useNearViewport } from "@/lib/useVisibility";
@@ -43,15 +43,22 @@ export function DeferredBook() {
   const ref = useRef<HTMLDivElement>(null);
   const budget = useDeviceBudget();
   const near = useNearViewport(ref, "200% 0px");
+  // Set if the book's WebGL context dies and cannot be rebuilt. It is a
+  // one-way door: a device that has just proved it cannot hold a context is
+  // not worth handing another one to, and the letter says everything the book
+  // says anyway. Stable callback so it is not a moving dependency inside the
+  // scene's listener effect.
+  const [glUnavailable, setGlUnavailable] = useState(false);
+  const handleGlUnavailable = useCallback(() => setGlUnavailable(true), []);
 
   // On a phone this stays false forever, so the chunk is never even requested.
-  const showBook = near && !budget.isPhone;
+  const showBook = near && !budget.isPhone && !glUnavailable;
 
   return (
     <div ref={ref} style={{ width: "100%", position: "relative" }}>
       {showBook ? (
         <>
-          <FoundersNoteBook />
+          <FoundersNoteBook onGlUnavailable={handleGlUnavailable} />
           {/* The book paints the letter into a WebGL canvas, which no screen
               reader or crawler can read. Same component, visually hidden —
               one source of markup, so the two can never drift apart. */}

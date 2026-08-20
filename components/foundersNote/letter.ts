@@ -18,8 +18,8 @@
 
 /** The letter body, as it appears on the book's left page. */
 export const FOUNDER_PARAGRAPHS = [
-  "Since childhood I have been captivated by gaming and animation — by worlds you do not merely watch, but step inside. I have always believed that when we see something we remember it for a while, yet when we truly experience something we never forget it.",
-  "That belief is where this journey began. Dwarka Studios exists to give people that unforgettable feeling, and to weave into it the history, culture, and heritage of our country — proof that the craftsmanship of our past belongs inside the most advanced experiences of the future. This is only the beginning, and I am glad you are here for it.",
+  "Since childhood, I've been deeply passionate about gaming and animation. I've always believed that when we simply see something, we may remember it for a while — but when we truly experience something, we never forget it. That's where this journey began: I wanted to give everyone that kind of unforgettable experience, and to weave into it the history, culture, and heritage of our country.",
+  "Dwarka Studios was born from that belief — that the stories and craftsmanship of our heritage deserve to live in the most advanced experiences of the future, and that intelligent technology, used with care, can make that possible faster and better than ever before. We're building a studio where culture and innovation aren't opposites, but partners. This is just the beginning, and I'm glad you're here for it.",
 ];
 
 export const FOUNDER_NAME = "Srikaran Adapa";

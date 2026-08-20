@@ -36,6 +36,15 @@ const SPINE_R = 0.13;
 
 const OPEN_ANGLE_MAX = THREE.MathUtils.degToRad(158);
 
+// How many times a lost WebGL context is worth rebuilding before this scene
+// gives up and hands the section back to the typeset letter. A context can be
+// lost for reasons that are entirely recoverable — a driver reset, a laptop
+// switching GPUs on wake, the browser reclaiming contexts from a tab that has
+// too many — and a lost context that nobody rebuilds is a transparent canvas,
+// i.e. a section that simply is not there. Two attempts covers the recoverable
+// cases without spinning forever if something is killing the context on sight.
+const MAX_GL_RECOVERIES = 2;
+
 // All baked canvas textures (cover foil, pages) are drawn at this multiple of
 // their original 960x1280 design resolution — higher texel density keeps the
 // gold-foil title and letter text crisp when the camera pushes in on open.
@@ -1155,10 +1164,20 @@ function Scene({
 /* Public component                                                        */
 /* ----------------------------------------------------------------------- */
 
-export function FoundersNoteBook() {
+export function FoundersNoteBook({
+  onGlUnavailable,
+}: {
+  onGlUnavailable?: () => void;
+} = {}) {
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const canvasElRef = useRef<HTMLCanvasElement>(null);
   const openRef = useRef(0);
   const [fontsReady, setFontsReady] = useState(false);
+  // Bumping this remounts the <Canvas> with a brand-new <canvas> element, which
+  // is the only reliable way back from a lost context: three.js cannot revive a
+  // renderer whose context is gone, and r3f keys its root off the DOM node.
+  const [glGeneration, setGlGeneration] = useState(0);
+  const recoveries = useRef(0);
   const [reducedMotion, setReducedMotion] = useState(
     () => typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -1181,6 +1200,36 @@ export function FoundersNoteBook() {
       cancelled = true;
     };
   }, []);
+
+  // A canvas whose context is lost keeps its layout box, keeps `opacity: 1`
+  // and draws nothing — with `alpha: true` that is a perfectly transparent
+  // element, so the failure looks exactly like the section never rendered.
+  // React StrictMode reproduces it on demand in development: its simulated
+  // remount makes r3f tear down the root it is about to re-adopt, and the
+  // deferred `forceContextLoss()` lands on the renderer the live tree is
+  // using. Same symptom in production whenever a real context is lost, so
+  // this recovers rather than special-casing dev.
+  useEffect(() => {
+    const canvas = canvasElRef.current;
+    if (!canvas) return;
+
+    const handleLost = (event: Event) => {
+      // Without preventDefault the browser will not fire contextrestored and
+      // will not let anything reuse this canvas.
+      event.preventDefault();
+      if (recoveries.current >= MAX_GL_RECOVERIES) {
+        // Out of retries: tell the caller so the reader gets the letter
+        // instead of an empty screen.
+        onGlUnavailable?.();
+        return;
+      }
+      recoveries.current += 1;
+      setGlGeneration((generation) => generation + 1);
+    };
+
+    canvas.addEventListener("webglcontextlost", handleLost);
+    return () => canvas.removeEventListener("webglcontextlost", handleLost);
+  }, [fontsReady, glGeneration, onGlUnavailable]);
 
   useEffect(() => {
     const el = wrapperRef.current;
@@ -1236,6 +1285,8 @@ export function FoundersNoteBook() {
     >
       {fontsReady && (
         <Canvas
+          key={glGeneration}
+          ref={canvasElRef}
           shadows
           camera={{ position: [0, 0.06, 3.6], fov: 36, near: 0.1, far: 20 }}
           dpr={[1, 2]}
