@@ -84,11 +84,12 @@ export function FoundersNoteLetter({ plain = false }: { plain?: boolean } = {}) 
               aria-hidden="true"
               className="mx-auto mb-5 block h-px w-24 bg-[linear-gradient(90deg,transparent,rgba(160,124,44,0.55),transparent)]"
             />
-            {/* On the book, the scrawl above the typeset name is genuinely
-                handwritten, so the pair reads as a signature over a caption.
-                Set in real type both times it just reads as the name printed
-                twice — so here the signature IS the attribution, and carries
-                the accessible name rather than being hidden from it. */}
+            {/* A scrawl over a typeset caption reads as a signature over a
+                credit only when the scrawl is genuinely handwritten. There is
+                no hand in this font stack, so set in real type both times it
+                just reads as the name printed twice — in both versions the
+                signature IS the attribution, and carries the accessible name
+                rather than being hidden from it. */}
             <p className="font-serif text-[clamp(1.6rem,6.5vw,2.125rem)] italic leading-none text-gold-deep">
               {SIGNATURE}
             </p>

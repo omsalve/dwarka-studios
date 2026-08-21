@@ -134,6 +134,8 @@ export function SplashScreen({ onComplete, withSound = false, skippable = true }
   // is inert. Mirrored into state because it also unmounts the button.
   const skippedRef = useRef(false);
   const [skipped, setSkipped] = useState(false);
+  // Latched on the first advance; only the invitation copy reads it.
+  const [started, setStarted] = useState(false);
 
   /* --- Preload video 2, but only once video 1 is safe ------------------
      Both videos wanting the pipe at once is the difference between video 1
@@ -218,6 +220,7 @@ export function SplashScreen({ onComplete, withSound = false, skippable = true }
     }
 
     enter("forward");
+    setStarted(true);
     void one.play().catch(() => {
       // Unmuted playback needs a real gesture; hover isn't one. Go silent
       // rather than not playing at all.
@@ -365,6 +368,71 @@ export function SplashScreen({ onComplete, withSound = false, skippable = true }
         ))}
       </video>
 
+      {/* The invitation. The only instruction in the intro, and the shot does
+          not advance until it is followed, so it is built to be found rather
+          than to stay out of the way.
+
+          The scrim is the load-bearing part. The frame underneath is carved
+          wood at full contrast — warm, busy, and roughly the same value as
+          parchment — so no weight or colour alone survives it. A gradient
+          floor calms the bottom third, which lets the line stay light and
+          spaced instead of turning into a chip of UI, and incidentally gives
+          the skip button the same footing.
+
+          Full-width and outside the door: the ground has to span the frame,
+          not a 400px column. Below the door in z, above nothing that matters
+          — it never takes the pointer. Fades out for good on the first
+          advance; re-showing it every time the pointer slips off the door
+          would blink at anyone still deciding, and by then they plainly know
+          where the feather is. */}
+      {!handedOff && (
+        <div
+          aria-hidden="true"
+          className={`pointer-events-none absolute inset-x-0 bottom-0 z-[5] flex justify-center transition-opacity duration-500 ${
+            started ? "opacity-0" : "opacity-100"
+          }`}
+        >
+          <div className="absolute inset-x-0 bottom-0 h-[30vh] bg-gradient-to-t from-black/80 via-black/40 to-transparent" />
+
+          {/* Sits higher on a phone: the skip pill is bottom-right, which on a
+              narrow viewport is close enough to the centred line to read as
+              one crowded row. */}
+          <div className="splash-invite relative mb-[15vh] sm:mb-[12vh]">
+            {/* Champagne bloom behind the words. Now that it sits on the
+                scrim rather than on lit wood, screen-blending reads as light
+                in the frame instead of washing out against it. */}
+            <span
+              className="splash-invite-bloom absolute left-1/2 top-1/2 h-[320%] w-[160%] mix-blend-screen"
+              style={{
+                transform: "translate(-50%, -50%)",
+                background:
+                  "radial-gradient(closest-side, rgba(255,246,222,0.5), rgba(226,190,120,0.18) 45%, transparent 74%)",
+                filter: "blur(12px)",
+              }}
+            />
+
+            {/* Hairline above the copy — a beat of deliberate framing, so the
+                line reads as part of the shot and not as chrome. */}
+            <span className="relative mx-auto mb-5 block h-px w-24 bg-gradient-to-r from-transparent via-[rgba(232,199,133,0.75)] to-transparent" />
+
+            <span
+              className="relative block whitespace-nowrap text-center font-serif text-[clamp(0.9rem,2.9vw,1.15rem)] uppercase text-parchment"
+              style={{
+                letterSpacing: "0.42em",
+                // Trailing letter-space would otherwise push the line left of
+                // true centre by half a space.
+                textIndent: "0.42em",
+                textShadow:
+                  "0 0 32px rgba(255,236,190,0.55), 0 2px 26px rgba(0,0,0,0.9), 0 0 4px rgba(0,0,0,0.55)",
+              }}
+            >
+              <span className="pointer-coarse:hidden">Hover on the feather</span>
+              <span className="hidden pointer-coarse:inline">Tap on the feather</span>
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* The exit. Above the door in z, so it stays reachable on a narrow
           viewport where the door spans the full width. */}
       {skippable && !skipped && <SkipIntroButton onSkip={skip} />}
@@ -400,11 +468,7 @@ export function SplashScreen({ onComplete, withSound = false, skippable = true }
           }}
           className="absolute inset-y-0 left-1/2 z-10 -translate-x-1/2 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[rgba(255,244,214,0.6)]"
           style={{ width: `min(${DOOR_WIDTH}px, 100vw)`, touchAction: "none" }}
-        >
-          <span className="pointer-events-none absolute inset-x-0 bottom-16 hidden text-center font-sans text-[0.65rem] uppercase tracking-[0.35em] text-parchment/60 pointer-coarse:block">
-            Tap to enter
-          </span>
-        </div>
+        />
       )}
     </div>
   );

@@ -92,9 +92,63 @@
   .stack-spin-slow,
   .stack-spin-slower,
   .stack-pulse,
-  .stack-drift {
+  .stack-drift,
+  .splash-invite,
+  .splash-invite-bloom {
     animation: none !important;
   }
+}
+
+/* Splash invitation — the line that tells a visitor the opening shot is
+   theirs to drive. It is the only instruction in the whole intro, so it has
+   to be found without being shouted: it arrives a beat after the frame
+   settles, breathes so the eye lands on it, and carries its own champagne
+   bloom because a fixed weight or colour cannot be trusted to hold up over
+   moving footage. */
+
+@keyframes splash-invite-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes splash-invite-breathe {
+  0%,
+  100% {
+    opacity: 0.66;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes splash-invite-bloom {
+  0%,
+  100% {
+    opacity: 0.34;
+    transform: translate(-50%, -50%) scale(0.92);
+  }
+  50% {
+    opacity: 0.72;
+    transform: translate(-50%, -50%) scale(1.06);
+  }
+}
+
+/* Entrance first, then the breath picks up where it left off. The breath is
+   delayed past the entrance so the two never fight over opacity. */
+.splash-invite {
+  animation:
+    splash-invite-in 900ms cubic-bezier(0.4, 0, 0.2, 1) 500ms both,
+    splash-invite-breathe 3.8s ease-in-out 1400ms infinite;
+}
+
+.splash-invite-bloom {
+  animation: splash-invite-bloom 4.6s ease-in-out infinite;
 }
 
 /* Services stack — ambient motion for the procedural card visuals. */

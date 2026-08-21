@@ -14,7 +14,6 @@ import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import * as THREE from "three";
 import {
-  FOUNDER_NAME,
   FOUNDER_PARAGRAPHS,
   FOUNDER_ROLE,
   SIGNATURE,
@@ -540,6 +539,142 @@ function buildLeftPageTexture(cinzel: string, playfair: string, paras: string[])
 /* Right page — the founder feature: framed portrait plate + credit         */
 /* ----------------------------------------------------------------------- */
 
+const PORTRAIT_SRC = "/images/srikaranimage.png";
+
+// The portrait is a cut-out on transparency, and the subject stands low and a
+// little right of centre in a mostly-empty frame. Fitting the *file* to the
+// plate would hang him in its bottom two-thirds under a band of dead headroom;
+// what has to be fitted is the subject. Measuring the opaque area beats baking
+// the crop in as four magic numbers — it costs one readback of a small image,
+// and a differently-framed portrait can then be dropped in with no code change.
+function alphaBounds(img: HTMLImageElement) {
+  const { canvas, ctx } = makeCanvas(img.naturalWidth, img.naturalHeight);
+  ctx.drawImage(img, 0, 0);
+  const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+  let x0 = width;
+  let y0 = height;
+  let x1 = -1;
+  let y1 = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      // The threshold ignores the near-transparent halo a cut-out leaves round
+      // its edge, which otherwise measures as several pixels of "subject".
+      if (data[(y * width + x) * 4 + 3] <= 16) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+
+  // Fully transparent, or a decode that produced nothing: use the whole frame
+  // rather than handing back an inside-out rect.
+  if (x1 < x0 || y1 < y0) return { x: 0, y: 0, w: width, h: height };
+  return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+// The mounted plate: warm studio backdrop, top-left key, floor falloff, and
+// either the founder's portrait or — until it decodes, or if it never does —
+// an engraved monogram. It is one function rather than inline drawing so the
+// portrait's late arrival can simply re-run it over the same rect.
+function paintPortraitPlate(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  cinzel: string,
+  portrait: HTMLImageElement | null
+) {
+  const bg = ctx.createLinearGradient(x, y, x, y + h);
+  bg.addColorStop(0, "#4a3f31");
+  bg.addColorStop(0.55, "#2e2519");
+  bg.addColorStop(1, "#1d160e");
+  ctx.fillStyle = bg;
+  ctx.fillRect(x, y, w, h);
+
+  const key = ctx.createRadialGradient(
+    x + w * 0.42,
+    y + h * 0.3,
+    0,
+    x + w * 0.42,
+    y + h * 0.3,
+    w * 0.95
+  );
+  key.addColorStop(0, "rgba(230,205,134,0.3)");
+  key.addColorStop(0.5, "rgba(200,162,74,0.08)");
+  key.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = key;
+  ctx.fillRect(x, y, w, h);
+
+  if (portrait) {
+    // Contain the subject, then stand him on the plate's floor: the cut-out
+    // carries no ground of its own, so anchoring the crop's bottom edge to the
+    // plate's lets the falloff painted next do the grounding for it.
+    const sub = alphaBounds(portrait);
+    const scale = Math.min((w * 0.9) / sub.w, (h * 0.94) / sub.h);
+    const dw = sub.w * scale;
+    const dh = sub.h * scale;
+
+    // A light warm grade. Everything else on this spread is leather, foil and
+    // aged paper, and a full-saturation cobalt shirt dropped into the middle of
+    // it reads as a photo pasted onto the page rather than a plate printed with
+    // it. Pulled this far the shirt is still plainly blue and the skin tones
+    // still read true — it is the clash that goes, not the colour. (Browsers
+    // without canvas filter support just get the ungraded photo.)
+    ctx.save();
+    ctx.filter = "saturate(0.75) sepia(0.12)";
+    ctx.drawImage(portrait, sub.x, sub.y, sub.w, sub.h, x + (w - dw) / 2, y + h - dh, dw, dh);
+    ctx.restore();
+  }
+
+  const floor = ctx.createLinearGradient(x, y + h * 0.5, x, y + h);
+  floor.addColorStop(0, "rgba(0,0,0,0)");
+  floor.addColorStop(1, "rgba(0,0,0,0.5)");
+  ctx.fillStyle = floor;
+  ctx.fillRect(x, y, w, h);
+
+  if (!portrait) {
+    // engraved monogram
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `600 ${w * 0.4}px ${cinzel}`;
+    ctx.letterSpacing = `${w * 0.02}px`;
+    ctx.fillStyle = "rgba(20,14,6,0.45)";
+    ctx.fillText("SA", x + w / 2 + 3 * TEX_SCALE, y + h * 0.47 + 3 * TEX_SCALE);
+    ctx.fillStyle = "rgba(230,205,134,0.16)";
+    ctx.fillText("SA", x + w / 2, y + h * 0.47);
+    ctx.letterSpacing = "0px";
+    ctx.restore();
+  }
+
+  // inner gold hairline hugging the photo
+  ctx.strokeStyle = "rgba(200,162,74,0.55)";
+  ctx.lineWidth = 1.2 * TEX_SCALE;
+  ctx.strokeRect(x, y, w, h);
+
+  // registration corner ticks
+  const tick = 26 * TEX_SCALE;
+  const inset = 12 * TEX_SCALE;
+  ctx.strokeStyle = "rgba(160,124,44,0.8)";
+  ctx.lineWidth = 1.6 * TEX_SCALE;
+  const corners: [number, number, number, number][] = [
+    [x + inset, y + inset, 1, 1],
+    [x + w - inset, y + inset, -1, 1],
+    [x + inset, y + h - inset, 1, -1],
+    [x + w - inset, y + h - inset, -1, -1],
+  ];
+  corners.forEach(([cx, cy, sx, sy]) => {
+    ctx.beginPath();
+    ctx.moveTo(cx + tick * sx, cy);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx, cy + tick * sy);
+    ctx.stroke();
+  });
+}
+
 function buildRightPageTexture(cinzel: string, playfair: string) {
   const W = 960 * TEX_SCALE;
   const H = 1280 * TEX_SCALE;
@@ -576,94 +711,26 @@ function buildRightPageTexture(cinzel: string, playfair: string) {
   const photoW = frameW - mat * 2;
   const photoH = frameH - mat * 2;
 
-  // ---- portrait plate placeholder: a warm studio backdrop, top-left key,
-  // floor falloff and an engraved monogram. Reads as an intentional editorial
-  // plate; drop a real portrait in by compositing over this area later. -----
-  const bg = ctx.createLinearGradient(photoX, photoY, photoX, photoY + photoH);
-  bg.addColorStop(0, "#4a3f31");
-  bg.addColorStop(0.55, "#2e2519");
-  bg.addColorStop(1, "#1d160e");
-  ctx.fillStyle = bg;
-  ctx.fillRect(photoX, photoY, photoW, photoH);
-
-  const key = ctx.createRadialGradient(
-    photoX + photoW * 0.42,
-    photoY + photoH * 0.3,
-    0,
-    photoX + photoW * 0.42,
-    photoY + photoH * 0.3,
-    photoW * 0.95
-  );
-  key.addColorStop(0, "rgba(230,205,134,0.3)");
-  key.addColorStop(0.5, "rgba(200,162,74,0.08)");
-  key.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = key;
-  ctx.fillRect(photoX, photoY, photoW, photoH);
-
-  const floor = ctx.createLinearGradient(photoX, photoY + photoH * 0.5, photoX, photoY + photoH);
-  floor.addColorStop(0, "rgba(0,0,0,0)");
-  floor.addColorStop(1, "rgba(0,0,0,0.5)");
-  ctx.fillStyle = floor;
-  ctx.fillRect(photoX, photoY, photoW, photoH);
-
-  // engraved monogram
-  ctx.save();
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = `600 ${photoW * 0.4}px ${cinzel}`;
-  ctx.letterSpacing = `${photoW * 0.02}px`;
-  ctx.fillStyle = "rgba(20,14,6,0.45)";
-  ctx.fillText("SA", photoX + photoW / 2 + 3 * TEX_SCALE, photoY + photoH * 0.47 + 3 * TEX_SCALE);
-  ctx.fillStyle = "rgba(230,205,134,0.16)";
-  ctx.fillText("SA", photoX + photoW / 2, photoY + photoH * 0.47);
-  ctx.letterSpacing = "0px";
-  ctx.restore();
-
-  // inner gold hairline hugging the photo
-  ctx.strokeStyle = "rgba(200,162,74,0.55)";
-  ctx.lineWidth = 1.2 * TEX_SCALE;
-  ctx.strokeRect(photoX, photoY, photoW, photoH);
-
-  // registration corner ticks
-  const tick = 26 * TEX_SCALE;
-  const inset = mat + 12 * TEX_SCALE;
-  ctx.strokeStyle = "rgba(160,124,44,0.8)";
-  ctx.lineWidth = 1.6 * TEX_SCALE;
-  const corners: [number, number, number, number][] = [
-    [frameX + inset, frameY + inset, 1, 1],
-    [frameX + frameW - inset, frameY + inset, -1, 1],
-    [frameX + inset, frameY + frameH - inset, 1, -1],
-    [frameX + frameW - inset, frameY + frameH - inset, -1, -1],
-  ];
-  corners.forEach(([cx, cy, sx, sy]) => {
-    ctx.beginPath();
-    ctx.moveTo(cx + tick * sx, cy);
-    ctx.lineTo(cx, cy);
-    ctx.lineTo(cx, cy + tick * sy);
-    ctx.stroke();
-  });
+  paintPortraitPlate(ctx, photoX, photoY, photoW, photoH, cinzel, null);
 
   // ---- credit block below the plate ----
   let cy = frameY + frameH + 78 * TEX_SCALE;
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
 
-  // handwritten-style signature
+  // The signature IS the attribution: the name is deliberately not repeated in
+  // type beneath it. A scrawl over a printed caption only reads as a signature
+  // when the scrawl is genuinely handwritten, and there is no hand in this font
+  // stack — set in Playfair italic over Cinzel small caps, the pair just reads
+  // as the same name printed twice. FoundersNoteLetter makes the same call.
   ctx.font = `italic 400 ${56 * TEX_SCALE}px ${playfair}`;
   ctx.fillStyle = "#3a3226";
   ctx.fillText(SIGNATURE, fcx, cy);
 
   hairlineRule(ctx, fcx - 70 * TEX_SCALE, fcx + 70 * TEX_SCALE, cy + 30 * TEX_SCALE, "rgba(160,124,44,0.6)", 1.2 * TEX_SCALE);
 
-  // typeset name
-  cy += 84 * TEX_SCALE;
-  ctx.font = `600 ${34 * TEX_SCALE}px ${cinzel}`;
-  ctx.letterSpacing = `${5 * TEX_SCALE}px`;
-  ctx.fillStyle = INK;
-  ctx.fillText(FOUNDER_NAME.toUpperCase(), fcx + 2.5 * TEX_SCALE, cy);
-
   // role
-  cy += 42 * TEX_SCALE;
+  cy += 68 * TEX_SCALE;
   ctx.font = `400 ${16 * TEX_SCALE}px ${cinzel}`;
   ctx.letterSpacing = `${4 * TEX_SCALE}px`;
   ctx.fillStyle = "rgba(120,108,86,1)";
@@ -673,6 +740,23 @@ function buildRightPageTexture(cinzel: string, playfair: string) {
   const map = new THREE.CanvasTexture(canvas);
   map.colorSpace = THREE.SRGBColorSpace;
   map.anisotropy = 8;
+
+  // The portrait arrives after the texture does, so the plate is painted twice:
+  // once now, so the page is never a hole, and again once the image decodes.
+  // Flagging the map is all the second pass needs — the material already holds
+  // it, and the scene redraws every frame it is visible for, so the re-upload
+  // lands on the next one. A load that fails leaves the monogram plate standing.
+  const portrait = new Image();
+  portrait.decoding = "async";
+  portrait.src = PORTRAIT_SRC;
+  portrait
+    .decode()
+    .then(() => {
+      paintPortraitPlate(ctx, photoX, photoY, photoW, photoH, cinzel, portrait);
+      map.needsUpdate = true;
+    })
+    .catch(() => {});
+
   return map;
 }
 

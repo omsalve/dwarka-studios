@@ -22,10 +22,11 @@ export const FOUNDER_PARAGRAPHS = [
   "Dwarka Studios was born from that belief — that the stories and craftsmanship of our heritage deserve to live in the most advanced experiences of the future, and that intelligent technology, used with care, can make that possible faster and better than ever before. We're building a studio where culture and innovation aren't opposites, but partners. This is just the beginning, and I'm glad you're here for it.",
 ];
 
-export const FOUNDER_NAME = "Srikaran Adapa";
 export const FOUNDER_ROLE = "Founder · Dwarka Studios";
 
-/** Handwritten-style scrawl set above the typeset name, in both versions. */
+/** The sign-off, and the only place the founder's name appears in either
+    version — see the note in FoundersNoteLetter's footer for why it is not
+    also repeated as a typeset caption underneath. */
 export const SIGNATURE = "Srikaran Adapa";
 
 /** The lockup on the book's right page: kicker, then the two title words. */

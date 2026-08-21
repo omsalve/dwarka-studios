@@ -8,20 +8,18 @@
    has no natural end to wait for. This is that exit: one quiet control,
    bottom-right, plus Escape.
 
-   It deliberately stays out of the frame for the first beat — appearing
-   instantly would read as an apology for the thing it sits on top of, and
-   the shot deserves a moment before it offers to be dismissed. After
-   REVEAL_DELAY_MS it fades in and stays.
+   It is there from the first frame — the shot is hover-driven, so someone
+   who wants out has nothing to wait through, and a control that arrives late
+   is a control they had already given up looking for. The fade-in is the only
+   restraint left: it arrives rather than pops.
 
    Layered above the door (z-10) so it is always clickable, even on a narrow
    viewport where the door spans the full width.
    ----------------------------------------------------------------------- */
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { motion } from "motion/react";
 
-/** Beat of unimpeded shot before the exit offers itself. */
-const REVEAL_DELAY_MS = 1800;
 /** Fade-in — slow enough that it arrives rather than pops. */
 const REVEAL_FADE = 0.6; // seconds
 
@@ -34,16 +32,7 @@ interface Props {
 }
 
 export function SkipIntroButton({ onSkip, label = "Skip intro", className = "" }: Props) {
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setVisible(true), REVEAL_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  /* Escape is the keyboard's universal "let me out", and it works from the
-     first frame — the delay above is about visual restraint, not about
-     withholding the escape hatch from someone who already knows it exists. */
+  /* Escape is the keyboard's universal "let me out". */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -54,8 +43,6 @@ export function SkipIntroButton({ onSkip, label = "Skip intro", className = "" }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onSkip]);
-
-  if (!visible) return null;
 
   return (
     <motion.button
