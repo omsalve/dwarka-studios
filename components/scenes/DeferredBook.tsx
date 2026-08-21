@@ -26,10 +26,24 @@
    how the diary looks or behaves once it is on screen. The margin is wide so
    the swap always lands off-screen — it changes the section's height, and the
    book's scroll pin adds its own spacer the moment it initialises.
+
+   That wide margin has a second consequence, though, and it is the reason for
+   the idle gate below. Two viewports before this section is the *middle of the
+   services deck*, and mounting the book is not cheap: it bakes five procedural
+   canvas textures, which measured out at ~3,600 `measureText` and ~430
+   `fillText` calls in a single synchronous burst. Landing that burst inside a
+   scroll gesture is a visible hitch in the deck, three sections above.
+
+   So "near" now only *arms* the swap. The mount itself waits for the browser
+   to be idle, which during an active scroll it is not — so the bake reliably
+   slides into the first pause instead of interrupting the gesture. The wide
+   margin is what makes this safe: there is a lot of runway for an idle moment
+   to turn up. If one never does, the timeout fires and we are exactly where we
+   were before, which is the correct floor for this.
    ----------------------------------------------------------------------- */
 
 import dynamic from "next/dynamic";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FoundersNoteLetter } from "@/components/FoundersNoteLetter";
 import { useDeviceBudget } from "@/lib/deviceTier";
 import { useNearViewport } from "@/lib/useVisibility";
@@ -51,8 +65,27 @@ export function DeferredBook() {
   const [glUnavailable, setGlUnavailable] = useState(false);
   const handleGlUnavailable = useCallback(() => setGlUnavailable(true), []);
 
+  // `near` arms the swap; this lets it through on the first idle moment. See
+  // the note above — the point is to keep the texture bake out of an active
+  // scroll gesture, not to delay it indefinitely.
+  const armed = near && !budget.isPhone && !glUnavailable;
+  const [idle, setIdle] = useState(false);
+  useEffect(() => {
+    if (!armed || idle) return;
+    const ric = window.requestIdleCallback;
+    if (!ric) {
+      // Safari has no requestIdleCallback. A timeout is a poor substitute for
+      // "the main thread is free", but it is no worse than the unconditional
+      // mount this replaced.
+      const t = window.setTimeout(() => setIdle(true), 400);
+      return () => window.clearTimeout(t);
+    }
+    const handle = ric(() => setIdle(true), { timeout: 2500 });
+    return () => window.cancelIdleCallback(handle);
+  }, [armed, idle]);
+
   // On a phone this stays false forever, so the chunk is never even requested.
-  const showBook = near && !budget.isPhone && !glUnavailable;
+  const showBook = armed && idle;
 
   return (
     <div ref={ref} style={{ width: "100%", position: "relative" }}>

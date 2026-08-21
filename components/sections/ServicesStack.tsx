@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
   motion,
@@ -132,7 +132,23 @@ const RECEDE_Y = [118, 0, -24, -44, -60];
 const RECEDE_SCALE = [0.93, 1, 0.945, 0.905, 0.875];
 const RECEDE_ROTATEX = [-7, 0, 4.5, 7.5, 9.5];
 const RECEDE_ROTATEZ = [0, 0, 1.3, 2.1, 2.7];
-const RECEDE_OPACITY = [0, 1, 1, 0.97, 0.92];
+// 1 for every card that is actually on the deck, and 0 at the back of it.
+//
+// The 1s: a subtree opacity below 1 forces the browser to render the whole
+// card into an offscreen buffer and composite it back, and because these cards
+// contain blended children that buffer had to be rebuilt every time the card
+// moved. The 3% / 8% of light background that used to bleed through the two
+// deepest stages is already being done, more cheaply, by the recede scrim.
+//
+// The 0: this deck turned out to be *fill-rate* bound, not paint bound. Traced
+// on an Intel UHD at 1440x900 the GPU cost was almost perfectly linear in the
+// number of cards on screen — about 5.5ms per card per frame over a ~6.6ms
+// floor — so one card ran at a clean 60fps and four locked to 30. The fourth
+// card is the one that buys the least: by depth 3 it is scaled to 0.875 and
+// sitting behind three others, showing a ~25px band at the top. Retiring it
+// there keeps three cards in the stack, which is what reads as a deck anyway,
+// and hands a third of the deck's per-frame GPU budget back.
+const RECEDE_OPACITY = [0, 1, 1, 1, 0];
 const RECEDE_GLOW = [0, 1, 0.5, 0.3, 0.18];
 const RECEDE_SCRIM = [0, 0, 0.34, 0.5, 0.62];
 // Elevation used to drive the shadow hierarchy — the active face floats
@@ -194,10 +210,26 @@ function StackCard({
   const y = useTransform(depth, DEPTH_DOMAIN, RECEDE_Y);
   const scale = useTransform(depth, DEPTH_DOMAIN, RECEDE_SCALE);
   const rotateX = useTransform(depth, DEPTH_DOMAIN, RECEDE_ROTATEX);
-  const rotateZBase = useTransform(depth, DEPTH_DOMAIN, RECEDE_ROTATEZ);
-  const rotateZ = useTransform(rotateZBase, (v) => (index % 2 === 0 ? -v : v));
+  // The alternating lean used to hang a second transform off the first, so
+  // every card carried two motion values and two subscriber hops for one
+  // number. Baking the sign into the output array does the same thing once.
+  const rotateZValues = useMemo(
+    () => (index % 2 === 0 ? RECEDE_ROTATEZ.map((v) => -v) : RECEDE_ROTATEZ),
+    [index]
+  );
+  const rotateZ = useTransform(depth, DEPTH_DOMAIN, rotateZValues);
   const opacity = useTransform(depth, DEPTH_DOMAIN, RECEDE_OPACITY);
+  // A card that has not climbed onto the deck yet sits at opacity 0 — and for
+  // most of this section three of the four are in exactly that state. At
+  // opacity 0 they are still laid out, still composited, and still dragged
+  // through the stacking context on every frame. `visibility: hidden` takes
+  // them out of paint entirely, and unlike `display: none` it keeps their box,
+  // so coming back costs no layout.
+  const visibility = useTransform(opacity, (v) => (v > 0.01 ? "visible" : "hidden"));
   const glowOpacity = useTransform(depth, DEPTH_DOMAIN, RECEDE_GLOW);
+  const glowVisibility = useTransform(glowOpacity, (v) =>
+    v > 0.32 ? "visible" : "hidden"
+  );
   const scrimOpacity = useTransform(depth, DEPTH_DOMAIN, RECEDE_SCRIM);
   const lift = useTransform(depth, DEPTH_DOMAIN, RECEDE_LIFT);
 
@@ -214,6 +246,13 @@ function StackCard({
   // (see SETTLED_SHADOW / FLOATING_SHADOW below). Only `opacity` animates, the
   // layers are painted once, and the whole deck runs on the compositor.
   const floatShadowOpacity = useTransform(lift, [RECEDE_LIFT[4], 1], [0, 1]);
+  // Same fill-rate argument as the bloom: this quad is card-sized *plus* a
+  // 90px blur skirt, and past the first receded stage it is a barely-there
+  // shadow under a card that is already mostly covered. Taken out of the
+  // composite rather than blended at an alpha that reads as nothing.
+  const floatShadowVisibility = useTransform(floatShadowOpacity, (v) =>
+    v > 0.25 ? "visible" : "hidden"
+  );
 
   const accent = ACCENT[service.accent];
   // Touch devices have no hovering pointer to track at all, and on a low-tier
@@ -221,9 +260,21 @@ function StackCard({
   const pointerFx = useDeviceBudget().allowPointerFx;
 
   // --- Restrained pointer-driven light + tilt, only on the active face ---
-  // `activeness` is 1 at depth 0 and falls to 0 as the card leaves the front,
-  // so receded cards silently ignore the pointer without any React state.
-  const activeness = useTransform(depth, [-0.55, 0, 0.55], [0, 1, 0]);
+  // `activeness` is 1 on the front card and 0 once it has left the front, so
+  // receded cards silently ignore the pointer without any React state.
+  //
+  // It used to be `useTransform(depth, …)` — derived continuously from the
+  // scroll. That was the quiet expensive one. Because it changed on every
+  // frame, so did `tiltX`, `tiltY` and `hoverScale`, so Motion rewrote a
+  // second 3D transform on a second promoted layer, per card, for the whole
+  // length of the deck — to express the identity transform, since with no
+  // pointer on the card `px`, `py` and `hover` are all resting at 0.
+  //
+  // A pointer can only be on one card at a time, and it cannot be on a card
+  // without entering it, so the question "is this the front card?" only has
+  // to be answered at that moment. Sampling it on enter leaves the tilt chain
+  // completely still while scrolling.
+  const activeness = useMotionValue(0);
 
   const pxRaw = useMotionValue(0);
   const pyRaw = useMotionValue(0);
@@ -249,6 +300,21 @@ function StackCard({
     [hover, activeness] as MotionValue[],
     ([h, a]: number[]) => h * a * 0.5
   );
+
+  // The sheen is `mix-blend-mode: soft-light` across the whole card face. A
+  // blended child cannot be composited on its own — it has to be drawn against
+  // its backdrop — which pulls the entire card out of the fast path and makes
+  // every scroll frame a repaint of the card *and* the blend, four cards deep.
+  //
+  // It is also invisible unless a pointer is on the card. So it is mounted on
+  // enter and unmounted once the leave spring has actually finished fading it,
+  // which means the deck scrolls with no blended layer in it at all. Two React
+  // renders per hover, none per frame.
+  const [sheenMounted, setSheenMounted] = useState(false);
+  useEffect(() => {
+    if (!pointerFx) return;
+    return hover.on("change", (v) => setSheenMounted(v > 0.002));
+  }, [hover, pointerFx]);
 
   // getBoundingClientRect inside a pointermove handler forces a synchronous
   // layout on *every* event — up to ~120 a second on a high-polling mouse.
@@ -276,6 +342,9 @@ function StackCard({
   function handlePointerEnter(event: React.PointerEvent<HTMLDivElement>) {
     if (!pointerFx) return;
     rectRef.current = event.currentTarget.getBoundingClientRect();
+    // Sampled once, here — see the note on `activeness`.
+    const d = depth.get();
+    activeness.set(Math.max(0, 1 - Math.abs(d) / 0.55));
     hoverRaw.set(1);
   }
   function handlePointerLeave() {
@@ -285,159 +354,232 @@ function StackCard({
     pyRaw.set(0);
   }
 
-  const card = (
-    <motion.div
-      style={{ y, scale, rotateX, rotate: rotateZ, opacity, zIndex: index, transformPerspective: 2400 }}
-      className="absolute inset-0 flex items-center justify-center px-4 sm:px-6"
-    >
+  // Everything inside the card, hoisted out so the pointer-tilt wrapper can be
+  // dropped entirely on devices that have no pointer to tilt for. That wrapper
+  // is not free when it is idle: `activeness` is derived from `depth`, so it
+  // changed on every scroll frame and Motion rewrote a second 3D transform per
+  // card for a value that was always the identity.
+  const body = (
+    <>
+      {/* Ambient accent bloom — pure radial falloff, no blur filter.
+          It is larger than the card it sits behind, so it is one of the widest
+          translucent quads in the deck, and the deeper stages spend it on
+          almost nothing: by depth 2 the glow is at 0.3 of a colour that is
+          itself 0.34 alpha, behind two cards that already cover it. Below the
+          threshold it is taken out of the composite entirely rather than
+          blended at an alpha nobody can see. */}
       <motion.div
-        onPointerMove={pointerFx ? handlePointerMove : undefined}
-        onPointerEnter={pointerFx ? handlePointerEnter : undefined}
-        onPointerLeave={pointerFx ? handlePointerLeave : undefined}
-        style={{ rotateX: tiltX, rotateY: tiltY, scale: hoverScale, transformPerspective: 1400 }}
-        className="relative w-full max-w-[1080px]"
-      >
-        {/* Ambient accent bloom — pure radial falloff, no blur filter. */}
-        <motion.div
-          aria-hidden="true"
-          style={{
-            opacity: glowOpacity,
-            background: `radial-gradient(58% 62% at 50% 40%, ${accent.glow}, transparent 72%)`,
-          }}
-          className="absolute -inset-10 -z-10 rounded-[52px]"
-        />
+        aria-hidden="true"
+        style={{
+          opacity: glowOpacity,
+          visibility: glowVisibility,
+          background: `radial-gradient(58% 62% at 50% 40%, ${accent.glow}, transparent 72%)`,
+        }}
+        className="absolute -inset-10 -z-10 rounded-[52px]"
+      />
 
-        {/* The two elevation layers. They sit outside the card's
-            `overflow-hidden` box (which would clip an outer shadow) and behind
-            it, exactly where the animated box-shadow used to be drawn. */}
+      {/* The floating half of the elevation cross-fade. Its resting partner
+          used to be a second span pinned behind the card; it is now the card's
+          own `box-shadow` (below), because an outer shadow is not clipped by
+          the element's own `overflow: hidden` and did not need a layer of its
+          own. That is one always-present, card-sized translucent quad with a
+          40px blur skirt removed from every card, on every frame. */}
+      <motion.span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 -z-[1] rounded-[28px]"
+        style={{
+          boxShadow: FLOATING_SHADOW,
+          opacity: floatShadowOpacity,
+          visibility: floatShadowVisibility,
+        }}
+      />
+
+      <div
+        style={{ boxShadow: SETTLED_SHADOW }}
+        className={`relative flex flex-col overflow-hidden rounded-[28px] border ${accent.ring} md:h-[68vh] md:min-h-[420px] md:max-h-[560px] md:flex-row`}
+      >
+        {/* Base surface — a subtly top-lit parchment, giving the card a
+            believable material rather than a flat fill. */}
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 -z-[1] rounded-[28px]"
-          style={{ boxShadow: SETTLED_SHADOW }}
+          className="pointer-events-none absolute inset-0 bg-[linear-gradient(168deg,#ffffff_0%,var(--bg)_46%,#f2ece1_100%)]"
         />
-        <motion.span
+
+        {/* Machined edge: hairline inner highlight around the whole rim, a
+            brighter catch along the top, and a soft seated shade at the base. */}
+        <span
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 -z-[1] rounded-[28px]"
-          style={{ boxShadow: FLOATING_SHADOW, opacity: floatShadowOpacity }}
+          className="pointer-events-none absolute inset-0 z-[25] rounded-[28px] shadow-[inset_0_1px_0_rgba(255,255,255,0.85),inset_0_0_0_1px_rgba(255,255,255,0.35),inset_0_-28px_46px_-32px_rgba(22,20,15,0.28)]"
         />
 
-        <motion.div
-          className={`relative flex flex-col overflow-hidden rounded-[28px] border ${accent.ring} md:h-[68vh] md:min-h-[420px] md:max-h-[560px] md:flex-row`}
-        >
-          {/* Base surface — a subtly top-lit parchment, giving the card a
-              believable material rather than a flat fill. */}
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 bg-[linear-gradient(168deg,#ffffff_0%,var(--bg)_46%,#f2ece1_100%)]"
-          />
+        {/* Accent edge-light — a faint colored rim that ties the card to its
+            discipline without a glowing border. */}
+        <span
+          aria-hidden="true"
+          style={{ boxShadow: `inset 0 0 0 1px ${accent.edge}` }}
+          className="pointer-events-none absolute inset-0 z-[26] rounded-[28px] opacity-40"
+        />
 
-          {/* Machined edge: hairline inner highlight around the whole rim, a
-              brighter catch along the top, and a soft seated shade at the base. */}
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-[25] rounded-[28px] shadow-[inset_0_1px_0_rgba(255,255,255,0.85),inset_0_0_0_1px_rgba(255,255,255,0.35),inset_0_-28px_46px_-32px_rgba(22,20,15,0.28)]"
-          />
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 z-[27] h-px bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.95),transparent)]"
+        />
 
-          {/* Accent edge-light — a faint colored rim that ties the card to its
-              discipline without a glowing border. */}
-          <span
-            aria-hidden="true"
-            style={{ boxShadow: `inset 0 0 0 1px ${accent.edge}` }}
-            className="pointer-events-none absolute inset-0 z-[26] rounded-[28px] opacity-40"
-          />
-
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 z-[27] h-px bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.95),transparent)]"
-          />
-
-          {/* Cursor-tracked sheen — soft-light so it warms the surface rather
-              than washing it out. Fades in only on the active face. */}
+        {/* Cursor-tracked sheen — soft-light so it warms the surface rather
+            than washing it out. Fades in only on the active face, and only
+            exists in the tree while the pointer is on the card (see
+            `sheenMounted`): a blended layer is the one thing in here that
+            would keep the card off the compositor while it scrolls. */}
+        {sheenMounted && (
           <motion.div
             aria-hidden="true"
             style={{ background: light, opacity: lightOpacity, mixBlendMode: "soft-light" }}
             className="pointer-events-none absolute inset-0 z-[28]"
           />
+        )}
 
-          {/* Recede scrim — dims the card as it sinks into the deck. */}
-          <motion.div
+        <div className="relative z-10 flex flex-1 flex-col justify-between p-8 sm:p-10 md:p-12">
+          <span
             aria-hidden="true"
-            style={{ opacity: scrimOpacity }}
-            className="pointer-events-none absolute inset-0 z-30 bg-ink"
-          />
+            className={`pointer-events-none absolute -top-3 right-6 select-none font-display text-[7rem] leading-none sm:-top-4 sm:text-[9rem] ${accent.numeral}`}
+          >
+            {service.n}
+          </span>
 
-          <div className="relative z-10 flex flex-1 flex-col justify-between p-8 sm:p-10 md:p-12">
-            <span
-              aria-hidden="true"
-              className={`pointer-events-none absolute -top-3 right-6 select-none font-display text-[7rem] leading-none sm:-top-4 sm:text-[9rem] ${accent.numeral}`}
-            >
-              {service.n}
-            </span>
-
-            <div className="relative">
-              <div className="flex items-center gap-3">
-                <span className={`font-display text-sm tracking-[0.15em] ${accent.label}`}>
-                  {service.n}
-                </span>
-                <span className="h-px w-8 bg-line" />
-                <span className="font-display text-xs tracking-[0.3em] text-ink-soft">
-                  {String(total).padStart(2, "0")} SERVICES
-                </span>
-              </div>
-
-              <h3 className="mt-6 max-w-md font-display text-3xl leading-[1.15] text-ink sm:text-4xl">
-                {service.name}
-              </h3>
-
-              <p className="mt-6 max-w-sm text-base leading-relaxed text-ink-soft sm:text-lg">
-                {service.description}
-              </p>
-            </div>
-
-            <div className="relative mt-10 flex items-center gap-3 md:mt-0">
-              <span className={`h-px w-10 ${accent.line}`} />
-              <span className="text-xs tracking-[0.2em] text-ink-soft/80">
-                DWARKA STUDIOS
+          <div className="relative">
+            <div className="flex items-center gap-3">
+              <span className={`font-display text-sm tracking-[0.15em] ${accent.label}`}>
+                {service.n}
+              </span>
+              <span className="h-px w-8 bg-line" />
+              <span className="font-display text-xs tracking-[0.3em] text-ink-soft">
+                {String(total).padStart(2, "0")} SERVICES
               </span>
             </div>
+
+            <h3 className="mt-6 max-w-md font-display text-3xl leading-[1.15] text-ink sm:text-4xl">
+              {service.name}
+            </h3>
+
+            <p className="mt-6 max-w-sm text-base leading-relaxed text-ink-soft sm:text-lg">
+              {service.description}
+            </p>
           </div>
 
-          <div
-            className={`relative z-10 min-h-[220px] flex-1 overflow-hidden md:min-h-0 md:max-w-[38%] ${accent.panel}`}
-          >
-            <Image
-              src={service.image}
-              alt={service.name}
-              fill
-              sizes="(min-width: 768px) 38vw, 100vw"
-              className="object-cover"
-            />
-            {/* Accent tint — lighter than before so the artwork reads through. */}
-            <div
-              aria-hidden="true"
-              className={`absolute inset-0 mix-blend-multiply opacity-40 ${accent.panel}`}
-            />
-            {/* Directional key light raking across the panel + a grounding
-                vignette, for depth and richer material. */}
-            <div
-              aria-hidden="true"
-              style={{
-                background: `linear-gradient(118deg, ${accent.sheen} 0%, transparent 42%), linear-gradient(300deg, rgba(0,0,0,0.42) 0%, transparent 46%)`,
-              }}
-              className="absolute inset-0"
-            />
-            {/* Seam between text and image — a lit edge that seats the panel. */}
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-y-0 left-0 hidden w-px bg-[linear-gradient(180deg,transparent,rgba(255,255,255,0.55),transparent)] md:block"
-            />
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-y-0 left-0 hidden w-16 shadow-[inset_18px_0_34px_-26px_rgba(0,0,0,0.6)] md:block"
-            />
+          <div className="relative mt-10 flex items-center gap-3 md:mt-0">
+            <span className={`h-px w-10 ${accent.line}`} />
+            <span className="text-xs tracking-[0.2em] text-ink-soft/80">
+              DWARKA STUDIOS
+            </span>
           </div>
+        </div>
+
+        {/* `isolation: isolate` matters more than it looks. The accent tint
+            below is `mix-blend-multiply`, and a blend resolves against
+            everything beneath it in the nearest isolated stacking context —
+            which, without this, was the whole card. That made the entire
+            card a single non-composited blend group that had to be redrawn
+            on every scroll frame. Isolating here keeps the blend (and the
+            redraw) inside the image panel, where its backdrop actually is,
+            and the look is identical. */}
+        <div
+          style={{ isolation: "isolate" }}
+          className={`relative z-10 min-h-[220px] flex-1 overflow-hidden md:min-h-0 md:max-w-[38%] ${accent.panel}`}
+        >
+          <Image
+            src={service.image}
+            alt={service.name}
+            fill
+            sizes="(min-width: 768px) 38vw, 100vw"
+            className="object-cover"
+          />
+          {/* Accent tint — lighter than before so the artwork reads through. */}
+          <div
+            aria-hidden="true"
+            className={`absolute inset-0 mix-blend-multiply opacity-40 ${accent.panel}`}
+          />
+          {/* Directional key light raking across the panel + a grounding
+              vignette, for depth and richer material. */}
+          <div
+            aria-hidden="true"
+            style={{
+              background: `linear-gradient(118deg, ${accent.sheen} 0%, transparent 42%), linear-gradient(300deg, rgba(0,0,0,0.42) 0%, transparent 46%)`,
+            }}
+            className="absolute inset-0"
+          />
+          {/* Seam between text and image — a lit edge that seats the panel. */}
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 left-0 hidden w-px bg-[linear-gradient(180deg,transparent,rgba(255,255,255,0.55),transparent)] md:block"
+          />
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 left-0 hidden w-16 shadow-[inset_18px_0_34px_-26px_rgba(0,0,0,0.6)] md:block"
+          />
+        </div>
+      </div>
+
+      {/* Recede scrim — dims the card as it sinks into the deck.
+          ─────────────────────────────────────────────────────────────────
+          This lives *outside* the card, and that is the single most valuable
+          line in this file.
+
+          It used to be the last child inside the card face, which is a
+          rounded, `overflow-hidden` box carrying a 3D transform. A compositor
+          cannot draw an animating child straight into the root through a
+          rounded clip — it has to render the whole clipped subtree into an
+          offscreen surface first, apply the clip and the projection, then
+          draw that. So one animating opacity in here meant all four cards
+          were being re-rendered offscreen every frame instead of being drawn
+          as the cached textures they otherwise are. Measured on an Intel UHD
+          at 1440x900, the deck ran at a locked 30fps with ~51% of frames
+          dropped; one card alone ran at a clean 60.
+
+          As a sibling it covers exactly the same box — the wrapper is sized
+          by the card face — and rounds its own corners, so it looks identical
+          while staying a plain quad the compositor can just blend. */}
+      <motion.div
+        aria-hidden="true"
+        style={{ opacity: scrimOpacity }}
+        className="pointer-events-none absolute inset-0 z-30 rounded-[28px] bg-ink"
+      />
+    </>
+  );
+
+  const card = (
+    <motion.div
+      style={{
+        y,
+        scale,
+        rotateX,
+        rotate: rotateZ,
+        opacity,
+        visibility,
+        zIndex: index,
+        transformPerspective: 2400,
+        // Promote the card once, up front. The whole deck animation is
+        // transform + opacity, so a standing compositor layer is exactly the
+        // right shape for it — without the hint Chromium keeps re-rasterising
+        // the card at each new scale step, which is what made arriving at a
+        // new card hitch.
+        willChange: "transform, opacity",
+        backfaceVisibility: "hidden",
+      }}
+      className="absolute inset-0 flex items-center justify-center px-4 sm:px-6"
+    >
+      {pointerFx ? (
+        <motion.div
+          onPointerMove={handlePointerMove}
+          onPointerEnter={handlePointerEnter}
+          onPointerLeave={handlePointerLeave}
+          style={{ rotateX: tiltX, rotateY: tiltY, scale: hoverScale, transformPerspective: 1400 }}
+          className="relative w-full max-w-[1080px]"
+        >
+          {body}
         </motion.div>
-      </motion.div>
+      ) : (
+        <div className="relative w-full max-w-[1080px]">{body}</div>
+      )}
     </motion.div>
   );
 
@@ -590,7 +732,10 @@ export function ServicesStack() {
                   aria-hidden="true"
                   className="pointer-events-none absolute inset-0 z-20 rounded-[24px] shadow-[inset_0_1px_0_rgba(255,255,255,0.8),inset_0_0_0_1px_rgba(255,255,255,0.3)]"
                 />
-                <div className={`relative h-36 w-full ${accent.panel}`}>
+                <div
+                  style={{ isolation: "isolate" }}
+                  className={`relative h-36 w-full ${accent.panel}`}
+                >
                   <Image
                     src={service.image}
                     alt={service.name}

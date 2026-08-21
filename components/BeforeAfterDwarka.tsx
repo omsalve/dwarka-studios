@@ -49,6 +49,169 @@ function density(base: number, scale: number) {
 }
 
 /* ----------------------------------------------------------------------- */
+/* Responsive stage layout                                                 */
+/*                                                                         */
+/* The scene is a fixed-size 3D set, so "responsive" here is not CSS: it is */
+/* where the two orbs stand and how far back the camera has to be for them  */
+/* to fit the viewport. A perspective camera's horizontal field of view is  */
+/* its vertical FOV times the aspect ratio, so a portrait phone sees barely */
+/* a third of the width a 16:9 desktop does — the side-by-side composition  */
+/* simply falls off both edges there, and pulling the camera back far       */
+/* enough to rescue it shrinks the orbs to specks.                          */
+/*                                                                         */
+/* So portrait viewports get the same story rotated: Before above, After    */
+/* below, the energy bridge running down between them. Landscape keeps the  */
+/* original side-by-side frame untouched — at 16:9 the numbers below        */
+/* resolve to exactly the values that were hard-coded before — and only     */
+/* eases the camera back on narrower-than-16:9 landscape windows.           */
+/* ----------------------------------------------------------------------- */
+
+/** Vertical FOV of the scene camera, in degrees. Mirrored on <Canvas>. */
+const FOV = 45;
+/** tan(FOV/2) — half the visible world height one unit in front of the camera. */
+const HALF_TAN = Math.tan((FOV / 2) * (Math.PI / 180));
+/** The landscape resting distance. Also the reference for label scaling. */
+const BASE_Z = 5.2;
+
+export type SceneLayout = {
+  /** true when the orbs are stacked (portrait), false when side by side. */
+  vertical: boolean;
+  /** Phone-sized: tighter type and a lighter panel. */
+  compact: boolean;
+  beforePos: [number, number, number];
+  afterPos: [number, number, number];
+  bridgeStart: [number, number, number];
+  bridgeEnd: [number, number, number];
+  beforeLabelPos: [number, number, number];
+  afterLabelPos: [number, number, number];
+  /** Resting camera height, chosen so the composition clears the fixed nav. */
+  cameraY: number;
+  /** Resting camera distance that fits the composition in this viewport. */
+  cameraZ: number;
+  labelFontSize: number;
+  labelTracking: string;
+  /** Scaled with cameraZ so labels keep one apparent size on every device. */
+  labelDistanceFactor: number;
+  /** Where each orb's reflection pools on the gold backdrop, in UV space. */
+  poolBefore: [number, number];
+  poolAfter: [number, number];
+};
+
+/** Orb centre → its own label, in world units (orb radius is ~0.78). */
+const LABEL_GAP = 0.9;
+
+/* Where the stacked composition is allowed to live, in NDC. The top stops
+   short of 1 because the nav is fixed over this section and eats the first
+   ~9% of a tall phone (and a fifth of a landscape one); the bottom leaves a
+   little breathing room under the lower label. */
+const STACK_TOP_NDC = 0.72;
+const STACK_BOTTOM_NDC = -0.9;
+
+function computeLayout(width: number, height: number): SceneLayout {
+  const aspect = width > 0 && height > 0 ? width / height : 16 / 9;
+  const vertical = aspect < 1;
+  const compact = Math.min(width, height) < 430;
+
+  /* Fit = the closest the camera can stand and still contain a half-extent
+     of reqW × reqH. The height term is the same on every device; only the
+     width term tightens as the viewport narrows. */
+  const fit = (reqW: number, reqH: number, floor: number) =>
+    Math.max(floor, reqH / HALF_TAN, reqW / (HALF_TAN * aspect));
+
+  if (vertical) {
+    const sep = 1.45;
+    // Before's label sits above it and After's below, so the pair never
+    // collides with the bridge running between them.
+    const label = sep + LABEL_GAP;
+    /* The stack has to fit label-to-label inside the NDC band above, which
+       fixes the half-height the camera needs — then cameraY slides the whole
+       thing down until its top label lands exactly on STACK_TOP_NDC. */
+    const bandHalfHeight = (2 * label) / (STACK_TOP_NDC - STACK_BOTTOM_NDC);
+    const cameraZ = fit(1.25, bandHalfHeight, 5.6);
+    const cameraY = label - STACK_TOP_NDC * (cameraZ * HALF_TAN);
+    return {
+      vertical: true,
+      compact,
+      beforePos: [0, sep, 0],
+      afterPos: [0, -sep, 0],
+      bridgeStart: [0, sep - 0.85, 0],
+      bridgeEnd: [0, -sep + 0.85, 0],
+      beforeLabelPos: [0, label, 0],
+      afterLabelPos: [0, -label, 0],
+      cameraY,
+      cameraZ,
+      labelFontSize: compact ? 11 : 13,
+      labelTracking: compact ? "0.2em" : "0.25em",
+      labelDistanceFactor: 8 * (cameraZ / BASE_Z),
+      poolBefore: [0.5, 0.68],
+      poolAfter: [0.5, 0.32],
+    };
+  }
+
+  const sep = 1.9;
+  // 2.15 is BASE_Z * HALF_TAN — the height term is inert at or above 16:9,
+  // which is what keeps desktop identical to the pre-responsive scene.
+  const cameraZ = fit(3.1, 2.15, BASE_Z);
+  return {
+    vertical: false,
+    compact,
+    beforePos: [-sep, 0, 0],
+    afterPos: [sep, 0, 0],
+    bridgeStart: [-sep + 0.85, 0, 0],
+    bridgeEnd: [sep - 0.85, 0, 0],
+    beforeLabelPos: [-sep, -1.25, 0],
+    afterLabelPos: [sep, -1.25, 0],
+    cameraY: 0.1,
+    cameraZ,
+    labelFontSize: compact ? 11 : 13,
+    labelTracking: compact ? "0.2em" : "0.25em",
+    labelDistanceFactor: 8 * (cameraZ / BASE_Z),
+    poolBefore: [0.3, 0.5],
+    poolAfter: [0.7, 0.5],
+  };
+}
+
+/** Cheap identity for a layout, so resizes that change nothing re-render nothing. */
+function layoutKey(l: SceneLayout) {
+  return `${l.vertical}|${l.compact}|${l.cameraY.toFixed(3)}|${l.cameraZ.toFixed(3)}`;
+}
+
+/**
+ * Measures the scene shell and returns the layout for it. Uses a
+ * ResizeObserver rather than a window resize listener so it also reacts to
+ * the mobile URL bar collapsing, and only commits a new object when the
+ * composition actually changes — the layout feeds `useMemo` deps deep in the
+ * r3f tree, and rebuilding the bridge geometry on every scroll-driven
+ * viewport nudge would be wasteful.
+ */
+function useSceneLayout(ref: React.RefObject<HTMLDivElement | null>) {
+  const [layout, setLayout] = useState<SceneLayout>(() =>
+    computeLayout(
+      typeof window === "undefined" ? 1440 : window.innerWidth,
+      typeof window === "undefined" ? 900 : window.innerHeight
+    )
+  );
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const apply = (w: number, h: number) => {
+      const next = computeLayout(w, h);
+      setLayout((prev) => (layoutKey(prev) === layoutKey(next) ? prev : next));
+    };
+    apply(el.clientWidth, el.clientHeight);
+    const ro = new ResizeObserver(([entry]) => {
+      const box = entry.contentRect;
+      apply(box.width, box.height);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+
+  return layout;
+}
+
+/* ----------------------------------------------------------------------- */
 /* Shared time source                                                      */
 /*                                                                         */
 /* r3f's `state.clock` is a THREE.Clock under the hood, now deprecated —   */
@@ -704,7 +867,9 @@ function AfterOrb({
       groupRef.current.rotation.y += delta * 0.045;
       const liftTarget = selected ? SELECT_LIFT : 0;
       liftRef.current = THREE.MathUtils.damp(liftRef.current, liftTarget, 1.8, delta);
-      groupRef.current.position.y = position[1] + Math.sin(t * 0.4 + 1.3) * 0.05 + liftRef.current;
+      // Local to the outer group, which already sits at `position` — adding
+      // position[1] here would apply the offset a second time.
+      groupRef.current.position.y = Math.sin(t * 0.4 + 1.3) * 0.05 + liftRef.current;
 
       const scaleTarget = (selected ? SELECT_SCALE : 1) * reveal;
       const nextScale = THREE.MathUtils.damp(groupRef.current.scale.x, scaleTarget, 1.8, delta);
@@ -817,7 +982,26 @@ function EnergyBridge({
   const geometry = useMemo(() => {
     const startV = new THREE.Vector3(...start);
     const endV = new THREE.Vector3(...end);
-    const mid = startV.clone().lerp(endV, 0.5).add(new THREE.Vector3(0, 0.28, 0));
+
+    // The bridge runs horizontally between side-by-side orbs and vertically
+    // between stacked ones (see computeLayout), so both the bow and the
+    // ribbon's width axis have to follow the run rather than assume +Y.
+    const dir = endV.clone().sub(startV);
+    const verticalRun = Math.abs(dir.y) > Math.abs(dir.x);
+
+    // Bow the arc across the run, not along it. Stacked, the run is shorter
+    // and the same 0.28 reads as a slack cable, so it is eased off.
+    const bow = verticalRun
+      ? new THREE.Vector3(0.18, 0, 0)
+      : new THREE.Vector3(0, 0.28, 0);
+    // Reference axis picked so `tangent × ref` always lands on Z: the ribbon
+    // is then seen almost edge-on from the camera and reads as one glowing
+    // line rather than a flat slab, in either orientation.
+    const ref = verticalRun
+      ? new THREE.Vector3(1, 0, 0)
+      : new THREE.Vector3(0, 1, 0);
+
+    const mid = startV.clone().lerp(endV, 0.5).add(bow);
     const curve = new THREE.QuadraticBezierCurve3(startV, mid, endV);
     const points = curve.getPoints(64);
 
@@ -830,8 +1014,7 @@ function EnergyBridge({
       const p = points[i];
       const next = points[Math.min(i + 1, points.length - 1)];
       const tangent = next.clone().sub(p).normalize();
-      const up = new THREE.Vector3(0, 1, 0);
-      const side = new THREE.Vector3().crossVectors(tangent, up).normalize().multiplyScalar(width);
+      const side = new THREE.Vector3().crossVectors(tangent, ref).normalize().multiplyScalar(width);
 
       positions.push(p.x - side.x, p.y - side.y, p.z - side.z);
       positions.push(p.x + side.x, p.y + side.y, p.z + side.z);
@@ -1077,17 +1260,27 @@ function Starfield({
 
    auraRef feeds the After orb's transformation energy into the reflection so the
    iridescence gently tints the surrounding gold as it flares. */
+
+/** Scratch target for the per-frame pool lerp — never allocate in useFrame. */
+const tmpPool = new THREE.Vector2();
+
 function Backdrop({
   timeRef,
   auraRef,
+  layout,
 }: {
   timeRef: React.RefObject<THREE.Timer>;
   auraRef: React.RefObject<number>;
+  layout: SceneLayout;
 }) {
   const uniforms = useMemo(
     () => ({
       uTime: { value: 0 },
       uAura: { value: 0 },
+      // Where each orb's light pools on the gold. Follows the stage layout so
+      // the pools stay under the orbs when the composition stacks.
+      uPoolBefore: { value: new THREE.Vector2(0.3, 0.5) },
+      uPoolAfter: { value: new THREE.Vector2(0.7, 0.5) },
       uDeep: { value: new THREE.Color("#281d0f") },      // deep antique gold, lower/edges
       uGold: { value: new THREE.Color("#7d6234") },      // main gold field
       uChampagne: { value: new THREE.Color("#c2a165") }, // champagne highlight, upper/pools
@@ -1106,10 +1299,23 @@ function Backdrop({
       3,
       delta
     );
+    // Glide rather than jump, so an orientation change reads as the light
+    // swinging round instead of the reflections teleporting.
+    uniforms.uPoolBefore.value.lerp(
+      tmpPool.set(layout.poolBefore[0], layout.poolBefore[1]),
+      Math.min(1, delta * 3)
+    );
+    uniforms.uPoolAfter.value.lerp(
+      tmpPool.set(layout.poolAfter[0], layout.poolAfter[1]),
+      Math.min(1, delta * 3)
+    );
   });
 
   return (
-    <mesh position={[0, 0, -4]} scale={[20, 12, 1]}>
+    // Stacked layouts pan the camera a long way up and down (see CameraRig),
+    // so the gold field has to be square-ish there or its bottom edge slides
+    // into frame. Side-by-side keeps the original 20×12.
+    <mesh position={[0, 0, -4]} scale={layout.vertical ? [22, 22, 1] : [20, 12, 1]}>
       <planeGeometry args={[1, 1]} />
       <shaderMaterial
         uniforms={uniforms}
@@ -1130,6 +1336,8 @@ function Backdrop({
           uniform vec3 uChampagne;
           uniform vec3 uReflBefore;
           uniform vec3 uReflAfter;
+          uniform vec2 uPoolBefore;
+          uniform vec2 uPoolAfter;
           varying vec2 vUv;
           varying vec3 vWorld;
 
@@ -1147,8 +1355,8 @@ function Backdrop({
             col = mix(col, uChampagne, smoothstep(0.45, 1.05, uv.y) * 0.6);
 
             // Soft reflection pools where each orb's light lands on the surface.
-            float lb = smoothstep(0.42, 0.0, distance(uv, vec2(0.30, 0.5)));
-            float la = smoothstep(0.48, 0.0, distance(uv, vec2(0.70, 0.5)));
+            float lb = smoothstep(0.42, 0.0, distance(uv, uPoolBefore));
+            float la = smoothstep(0.48, 0.0, distance(uv, uPoolAfter));
             col += uReflBefore * lb * 0.26;
             col += uReflAfter * la * 0.34;
 
@@ -1192,14 +1400,19 @@ function CameraRig({
   tiltRef,
   introRef,
   timeRef,
+  layout,
 }: {
   dollyRef: React.RefObject<number>;
   tiltRef: React.RefObject<number>;
   introRef: React.RefObject<number>;
   timeRef: React.RefObject<THREE.Timer>;
+  layout: SceneLayout;
 }) {
   const { camera, pointer } = useThree();
-  const base = useMemo(() => new THREE.Vector3(0, 0.1, 5.2), []);
+  const base = useMemo(
+    () => new THREE.Vector3(0, layout.cameraY, layout.cameraZ),
+    [layout.cameraY, layout.cameraZ]
+  );
 
   useFrame(() => {
     const delta = timeRef.current.getDelta();
@@ -1212,8 +1425,24 @@ function CameraRig({
     // completely at rest, so idle behaviour is byte-for-byte unchanged.
     const arrival = 1 - easeOutCubic(introRef.current ?? 1);
 
-    const targetX = base.x + pointer.x * 0.18 + tilt * 0.3;
-    const targetY = base.y + pointer.y * 0.1 + arrival * 0.5;
+    /* Selecting an orb leans the camera toward it. Side by side that is a
+       sideways lean. Stacked, it has to be a vertical one — and rather than
+       centring the chosen orb it parks it in the upper half, because the
+       panel on a portrait screen is a bottom sheet the orb has to clear.
+       `dolly` is the same 0→1 "something is selected" ramp the zoom uses, so
+       the lift eases in and out with the selection instead of snapping. */
+    const halfHeight = base.z * HALF_TAN;
+    /* Bring the chosen orb back to the frame's middle, then lift it most of
+       a half-screen more so the bottom-sheet panel has somewhere to go. 0.39
+       rather than a round 0.5 because the orb also grows and rises on select
+       (SELECT_SCALE / SELECT_LIFT), and at 0.5 its crown slid up under the
+       fixed nav. */
+    const focusY = layout.vertical
+      ? -tilt * layout.beforePos[1] + dolly * (-layout.cameraY - halfHeight * 0.39)
+      : 0;
+
+    const targetX = base.x + pointer.x * 0.18 + (layout.vertical ? 0 : tilt * 0.3);
+    const targetY = base.y + pointer.y * 0.1 + arrival * 0.5 + focusY;
     const targetZ = base.z - dolly * 0.22 - arrival * 1.7;
 
     // Snap-follow while the light still hides the arrival (fast damp), then
@@ -1222,7 +1451,14 @@ function CameraRig({
     camera.position.x = THREE.MathUtils.damp(camera.position.x, targetX, posDamp, delta);
     camera.position.y = THREE.MathUtils.damp(camera.position.y, targetY, posDamp + 0.5, delta);
     camera.position.z = THREE.MathUtils.damp(camera.position.z, targetZ, posDamp, delta);
-    camera.lookAt(tilt * 0.4, 0.05 - arrival * 0.15, 0);
+    // The look target rides the same focusY at the same height as the camera,
+    // so a stacked camera stays level as it travels — panning by rotating
+    // instead would skew the orbs toward the edges of the frame.
+    camera.lookAt(
+      layout.vertical ? 0 : tilt * 0.4,
+      base.y - 0.05 + focusY - arrival * 0.15,
+      0
+    );
 
     if (camera instanceof THREE.PerspectiveCamera) {
       const targetFov = 45 - dolly * 1.2 + arrival * 4;
@@ -1245,11 +1481,13 @@ function Scene({
   setSelected,
   introRef,
   budget,
+  layout,
 }: {
   selected: Selected;
   setSelected: (v: Selected) => void;
   introRef: React.RefObject<number>;
   budget: DeviceBudget;
+  layout: SceneLayout;
 }) {
   const timeRef = useSharedTimer();
 
@@ -1263,8 +1501,7 @@ function Scene({
   const pulseRef = useRef(-1);
   const starBoostRef = useRef(0.3);
 
-  const beforePos: [number, number, number] = [-1.9, 0, 0];
-  const afterPos: [number, number, number] = [1.9, 0, 0];
+  const { beforePos, afterPos } = layout;
 
   // Render priority -1 guarantees this runs before every other useFrame
   // subscriber in the tree (all default to priority 0), so the timer is
@@ -1304,8 +1541,14 @@ function Scene({
 
   return (
     <>
-      <CameraRig dollyRef={dollyRef} tiltRef={tiltRef} introRef={introRef} timeRef={timeRef} />
-      <Backdrop timeRef={timeRef} auraRef={arrivalBoostRef} />
+      <CameraRig
+        dollyRef={dollyRef}
+        tiltRef={tiltRef}
+        introRef={introRef}
+        timeRef={timeRef}
+        layout={layout}
+      />
+      <Backdrop timeRef={timeRef} auraRef={arrivalBoostRef} layout={layout} />
       <ambientLight intensity={0.18} />
       <directionalLight position={[3, 4, 5]} intensity={0.3} color="#fff3da" />
 
@@ -1326,8 +1569,8 @@ function Scene({
       <DustField timeRef={timeRef} count={density(DENSITY.dust, budget.particleScale)} />
 
       <EnergyBridge
-        start={[beforePos[0] + 0.85, 0, 0]}
-        end={[afterPos[0] - 0.85, 0, 0]}
+        start={layout.bridgeStart}
+        end={layout.bridgeEnd}
         pulseRef={pulseRef}
         intensityRef={bridgeIntensityRef}
         timeRef={timeRef}
@@ -1358,18 +1601,39 @@ function Scene({
         introRef={introRef}
       />
 
-      <Html position={[beforePos[0], -1.25, 0]} center distanceFactor={8} zIndexRange={[10, 0]}>
+      {/* distanceFactor scales with the camera's resting distance, so the
+          labels keep one apparent size whether the camera is at 5.2 (desktop)
+          or eased back to fit a narrow window. */}
+      <Html
+        position={layout.beforeLabelPos}
+        center
+        distanceFactor={layout.labelDistanceFactor}
+        zIndexRange={[10, 0]}
+      >
         <div
-          className="pointer-events-none select-none whitespace-nowrap text-center font-light tracking-[0.25em] text-white/80"
-          style={{ fontSize: "13px", textShadow: "0 1px 1px rgba(227, 144, 42, 0.4)" }}
+          className="pointer-events-none select-none whitespace-nowrap text-center font-light text-white/80"
+          style={{
+            fontSize: `${layout.labelFontSize}px`,
+            letterSpacing: layout.labelTracking,
+            textShadow: "0 1px 1px rgba(227, 144, 42, 0.4)",
+          }}
         >
           BEFORE DWARKA
         </div>
       </Html>
-      <Html position={[afterPos[0], -1.25, 0]} center distanceFactor={8} zIndexRange={[10, 0]}>
+      <Html
+        position={layout.afterLabelPos}
+        center
+        distanceFactor={layout.labelDistanceFactor}
+        zIndexRange={[10, 0]}
+      >
         <div
-          className="pointer-events-none select-none whitespace-nowrap text-center font-light tracking-[0.25em] text-white/80"
-          style={{ fontSize: "13px", textShadow: "0 1px 1px rgba(227, 144, 42, 0.4)" }}
+          className="pointer-events-none select-none whitespace-nowrap text-center font-light text-white/80"
+          style={{
+            fontSize: `${layout.labelFontSize}px`,
+            letterSpacing: layout.labelTracking,
+            textShadow: "0 1px 1px rgba(227, 144, 42, 0.4)",
+          }}
         >
           AFTER DWARKA
         </div>
@@ -1421,17 +1685,40 @@ const PANEL_CONTENT: Record<
 function SelectionPanel({
   selected,
   onClose,
+  layout,
 }: {
   selected: Selected;
   onClose: () => void;
+  layout: SceneLayout;
 }) {
   const side = selected;
   const content = side ? PANEL_CONTENT[side] : null;
+  const { vertical, compact } = layout;
 
-  const panelPosition =
-    side === "before"
-      ? "sm:left-[52%]"
-      : "sm:right-[52%] sm:left-auto";
+  /* Which side the panel takes is decided by the *scene's* orientation, not a
+     CSS breakpoint: a portrait tablet is 768px wide — well past `sm:` — but
+     its orbs are stacked, so a side panel would sit straight on top of them.
+     Stacked means a bottom sheet; side by side means the far side from the
+     chosen orb. Either way it has to clear the nav fixed over this section:
+     on a landscape phone the viewport is ~390px tall, and a panel centred in
+     the whole of it put its own title behind the nav bar. */
+  const placement = vertical
+    ? "left-1/2 bottom-[max(1.25rem,env(safe-area-inset-bottom))] w-[min(30rem,92vw)] max-h-[min(58svh,calc(100svh-7rem))]"
+    : // top/bottom both pinned with `my-auto` centres the panel inside the
+      // band below the nav rather than inside the whole viewport, and the max
+      // height lets it scroll instead of overflowing a short window.
+      `top-24 bottom-5 my-auto h-fit max-h-[calc(100svh-7.25rem)] w-[min(340px,42vw)] ${
+        side === "before" ? "left-[52%]" : "right-[52%]"
+      }`;
+
+  /* Centring lives in the motion transform, not in a `-translate-x-1/2`
+     utility: Motion writes `transform` inline every frame, which silently
+     overwrites a class-based translate and leaves the panel hanging off its
+     own anchor. */
+  const rest = vertical ? { x: "-50%", y: 0 } : { x: 0, y: 0 };
+  const offset = vertical
+    ? { x: "-50%", y: 28 }
+    : { x: side === "before" ? -24 : 24, y: 0 };
 
   return (
     <AnimatePresence>
@@ -1449,37 +1736,50 @@ function SelectionPanel({
           />
           <motion.div
             key={side}
-            className={`absolute z-20 left-1/2 bottom-6 w-[clamp(260px,88vw,380px)] -translate-x-1/2 sm:bottom-auto sm:top-1/2 sm:w-[340px] sm:-translate-y-1/2 sm:translate-x-0 ${panelPosition}`}
-            initial={{ opacity: 0, x: side === "before" ? -24 : 24, y: 0 }}
-            animate={{ opacity: 1, x: 0, y: 0 }}
-            exit={{ opacity: 0, x: side === "before" ? -24 : 24, y: 0 }}
+            // overflow-y-auto plus a max height keeps all four rows reachable
+            // on a landscape phone, where the viewport is only ~390px tall.
+            className={`absolute z-20 overflow-y-auto overscroll-contain rounded-2xl ${placement}`}
+            initial={{ opacity: 0, ...offset }}
+            animate={{ opacity: 1, ...rest }}
+            exit={{ opacity: 0, ...offset }}
             transition={{ duration: 0.7, ease: EASE }}
           >
-            <div className="relative rounded-2xl border border-[#c8a24a]/35 bg-[rgba(12,10,6,0.72)] p-6 shadow-[0_12px_50px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+            <div
+              className={`relative rounded-2xl border border-[#c8a24a]/35 bg-[rgba(12,10,6,0.72)] shadow-[0_12px_50px_rgba(0,0,0,0.55)] backdrop-blur-xl ${
+                compact ? "p-5" : "p-6"
+              }`}
+            >
               <button
                 type="button"
                 onClick={onClose}
                 aria-label="Close panel"
-                className="absolute right-4 top-4 text-base text-[#c8a24a]/70 transition-colors hover:text-[#e6cd86]"
+                // 44px hit area: the bare glyph alone was a ~16px tap target.
+                className="absolute right-1 top-1 flex h-11 w-11 items-center justify-center text-base text-[#c8a24a]/70 transition-colors hover:text-[#e6cd86]"
               >
                 &#10005;
               </button>
 
-              <p className="font-display text-xl tracking-[0.12em] text-[#e6cd86]">
+              <p
+                className={`font-display tracking-[0.12em] text-[#e6cd86] ${
+                  compact ? "pr-10 text-lg" : "pr-8 text-xl"
+                }`}
+              >
                 {content.title}
               </p>
               <p className="mt-3 text-sm leading-relaxed text-[#cfc6b4]/85">
                 {content.intro}
               </p>
 
-              <div className="mt-6 flex flex-col gap-3">
+              <div className={`flex flex-col ${compact ? "mt-4 gap-2" : "mt-6 gap-3"}`}>
                 {content.items.map((item, i) => (
                   <motion.div
                     key={item.label}
                     initial={{ opacity: 0, y: 14 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.5, delay: 0.18 + i * 0.09, ease: EASE }}
-                    className="rounded-xl border border-[#c8a24a]/20 bg-[linear-gradient(135deg,rgba(230,205,134,0.08),rgba(0,0,0,0))] px-4 py-3"
+                    className={`rounded-xl border border-[#c8a24a]/20 bg-[linear-gradient(135deg,rgba(230,205,134,0.08),rgba(0,0,0,0))] ${
+                      compact ? "px-3.5 py-2.5" : "px-4 py-3"
+                    }`}
                   >
                     <p className="text-[11px] tracking-[0.2em] text-[#c8a24a]">
                       {item.label.toUpperCase()}
@@ -1500,6 +1800,7 @@ export default function BeforeAfterDwarka() {
   const [selected, setSelected] = useState<Selected>(null);
   const budget = useDeviceBudget();
   const shellRef = useRef<HTMLDivElement>(null);
+  const layout = useSceneLayout(shellRef);
 
   // The splash sits on top of this section for the whole intro, but r3f's
   // default frameloop renders regardless of visibility — a continuous
@@ -1544,7 +1845,14 @@ export default function BeforeAfterDwarka() {
       data-navbar-fg="#2a1e0d"
     >
       <Canvas
-        camera={{ position: [0, 0.1, 5.2], fov: 45, near: 0.1, far: 50 }}
+        // Initial framing only — CameraRig damps toward the layout's resting
+        // position every frame, so a rotation eases rather than cuts.
+        camera={{
+          position: [0, layout.cameraY, layout.cameraZ],
+          fov: FOV,
+          near: 0.1,
+          far: 50,
+        }}
         frameloop={active ? "always" : "never"}
         // The ceiling only; AdaptiveResolution inside the scene walks the real
         // pixel ratio up and down from here based on measured frame time.
@@ -1569,6 +1877,7 @@ export default function BeforeAfterDwarka() {
           setSelected={setSelected}
           introRef={introRef}
           budget={budget}
+          layout={layout}
         />
       </Canvas>
       <div
@@ -1582,7 +1891,11 @@ export default function BeforeAfterDwarka() {
             "radial-gradient(ellipse at center, transparent 62%, rgba(24,15,5,0.20) 100%)",
         }}
       />
-      <SelectionPanel selected={selected} onClose={() => setSelected(null)} />
+      <SelectionPanel
+        selected={selected}
+        onClose={() => setSelected(null)}
+        layout={layout}
+      />
     </div>
   );
 }

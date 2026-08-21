@@ -19,6 +19,7 @@ import {
   FOUNDER_ROLE,
   SIGNATURE,
 } from "@/components/foundersNote/letter";
+import { useSceneActive } from "@/lib/useVisibility";
 
 if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
@@ -1178,6 +1179,43 @@ export function FoundersNoteBook({
   // renderer whose context is gone, and r3f keys its root off the DOM node.
   const [glGeneration, setGlGeneration] = useState(0);
   const recoveries = useRef(0);
+
+  /* ---- Render gate --------------------------------------------------------
+     This Canvas used to run r3f's default `frameloop="always"` from the moment
+     it mounted — and DeferredBook mounts it a generous two viewports early, so
+     "the moment it mounted" is *halfway through the services deck*. From there
+     it drew a shadowed, five-texture scene every frame for the whole rest of
+     that deck, and for every section after it, on a canvas nobody was looking
+     at. It was measurably the largest cost in scrolling the services section.
+
+     It cannot simply take the forge's `frameloop={active ? … : "never"}`,
+     because of a trap this project has already been bitten by once: an r3f
+     Canvas that is *born* with `frameloop="never"` never starts looping when
+     the prop later flips to `"always"`. It mounts, sizes its buffer, and draws
+     nothing, forever. The forge only gets away with the simple form because it
+     mounts on screen and is therefore born looping.
+
+     So the loop is gated in two stages. The Canvas is always born `"always"`,
+     which both dodges the trap and keeps the expensive one-off work — five
+     procedurally-baked canvas textures, the longest single main-thread task on
+     this page — happening early, where DeferredBook intends it. Once it has
+     actually rendered (`pausable`), the visibility gate takes over and the
+     scene costs nothing until it is genuinely being looked at. */
+  const active = useSceneActive(wrapperRef);
+  const [pausable, setPausable] = useState(false);
+  useEffect(() => {
+    if (!fontsReady) return;
+    // Three frames is comfortably past r3f creating its root and drawing its
+    // first frame, without pinning the gate to a wall-clock guess.
+    let handle = 0;
+    let left = 3;
+    const step = () => {
+      if (--left <= 0) setPausable(true);
+      else handle = requestAnimationFrame(step);
+    };
+    handle = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(handle);
+  }, [fontsReady]);
   const [reducedMotion, setReducedMotion] = useState(
     () => typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -1290,6 +1328,7 @@ export function FoundersNoteBook({
           shadows
           camera={{ position: [0, 0.06, 3.6], fov: 36, near: 0.1, far: 20 }}
           dpr={[1, 2]}
+          frameloop={!pausable || active ? "always" : "never"}
           gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
         >
           <Scene openRef={openRef} reducedMotion={reducedMotion} />

@@ -53,10 +53,32 @@ export function useNearViewport(
  * `extraGate` lets a caller add its own condition (the forge, for instance,
  * stays frozen behind the intro splash even though it is technically on
  * screen) without a second observer.
+ *
+ * `rootMargin` defaults to slack on the *bottom* edge only — see the note on
+ * DEFAULT_SCENE_MARGIN.
  */
+/**
+ * Slack on the bottom edge of the root, and none on the top.
+ *
+ * The slack exists so a scene is already rendering by the time its first pixel
+ * is visible — a canvas that starts on the exact intersection boundary shows
+ * one black frame. That is a property of *approaching* a scene, and on this
+ * page every scene is approached by scrolling down, so it is only ever wanted
+ * below the viewport.
+ *
+ * It used to be symmetric ("25% 0px"), and the top half of that was pure
+ * waste: it kept a scene rendering for a quarter of a viewport *after* it had
+ * left. For the forge that is not a rounding error — its shell sits directly
+ * above the services deck, so 25% of a viewport bought it 426px of the deck's
+ * scroll range, and it was still drawing ~7,600 times through the whole first
+ * card transition. Below, the slack stays exactly as it was.
+ */
+const DEFAULT_SCENE_MARGIN = "0px 0px 25% 0px";
+
 export function useSceneActive(
   ref: RefObject<Element | null>,
-  extraGate = true
+  extraGate = true,
+  rootMargin = DEFAULT_SCENE_MARGIN
 ): boolean {
   const [onScreen, setOnScreen] = useState(false);
   const [tabVisible, setTabVisible] = useState(true);
@@ -74,14 +96,11 @@ export function useSceneActive(
         onScreenRef.current = next;
         setOnScreen(next);
       },
-      // A little slack on either side so the scene is already rendering by
-      // the time its first pixel is visible — a canvas that starts on the
-      // exact intersection boundary shows one black frame.
-      { rootMargin: "25% 0px" }
+      { rootMargin }
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [ref]);
+  }, [ref, rootMargin]);
 
   useEffect(() => {
     const onChange = () => setTabVisible(document.visibilityState === "visible");

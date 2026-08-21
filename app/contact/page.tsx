@@ -74,10 +74,10 @@ export default function ContactPage() {
                 <div>
                   <p className={labelBase}>Email</p>
                   <a
-                    href="mailto:hello@dwarkastudios.com"
+                    href="mailto:info@dwarkastudio.in"
                     className="text-lg text-gold transition-colors hover:text-gold-deep"
                   >
-                    hello@dwarkastudios.com
+                    info@dwarkastudio.in
                   </a>
                 </div>
 

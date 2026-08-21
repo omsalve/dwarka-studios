@@ -94,12 +94,26 @@ export function Hero() {
      its blur skirt — and this element is near-viewport-sized, masked by seven
      radial gradients, and carries an overlay-blended noise texture.
 
-     On a phone or a low-tier laptop that is the single worst moment on the
-     page, so those devices get the same parchment and the same copy without
-     the defocus: a plain opacity/transform entrance, which composites for
-     free. The blot itself stays — it is what makes dark parchment-ink type
-     legible over a photographed temple, not decoration. */
+     On a low-tier laptop that is the single worst moment on the page, so
+     those devices get the same parchment and the same copy without the
+     defocus: a plain opacity/transform entrance, which composites for free.
+
+     Phones don't get the blot at all. It is not just the animated blur — the
+     blot is two near-viewport-sized elements sharing a seven-stop radial
+     `mask-image`, one carrying a static `blur(1.5px)` over six more
+     gradients and the other an `overlay`-blended turbulence texture. A
+     masked layer needs its own offscreen mask texture, and a blended one
+     cannot be composited independently, so the pair sits on top of the
+     temple plate for the whole hero and is re-rasterised every time the
+     dive scales it.
+
+     The blot only ever existed to make dark parchment-ink type legible over
+     a photographed temple. On a phone the same job is done by one flat
+     linear-gradient scrim and light type: one composited layer, no mask, no
+     blur, no blend — and the headline is the thing that survives, which is
+     the point. */
   const heavyFilters = budget.allowHeavyFilters;
+  const isPhone = budget.isPhone;
 
   // Only bind the filter at all where it is affordable. Even `blur(0px)`
   // promotes a layer and forces a filter pass on every scroll frame.
@@ -288,21 +302,34 @@ export function Hero() {
             style={textBlockStyle}
             className="absolute left-0 top-0 z-10 h-[92%] w-[98%] md:h-[68%] md:w-[78%] lg:h-[86%] lg:w-[84%]"
           >
-            <motion.div
-              initial={bloomFrom}
-              animate={bloomTo}
-              transition={bloomTransition}
-              style={{ transformOrigin: "2% 2%" }}
-              className="absolute inset-0"
-            >
-              <div className="hero-parchment-mask hero-parchment-fill absolute inset-0" />
+            {isPhone ? (
+              /* Phone: one gradient, one fade. Nothing here is masked,
+                 blurred or blended, so it rasterises once and rides the dive
+                 on the compositor. */
               <motion.div
+                aria-hidden="true"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                transition={{ duration: 1, ease: "easeOut", delay: 0.55 }}
-                className="hero-parchment-mask hero-parchment-grain absolute inset-0"
+                transition={{ duration: 0.9, ease: BLOOM_EASE, delay: 0.15 }}
+                className="absolute inset-0 bg-[linear-gradient(158deg,rgba(5,4,3,0.78)_0%,rgba(5,4,3,0.55)_42%,rgba(5,4,3,0.18)_68%,transparent_88%)]"
               />
-            </motion.div>
+            ) : (
+              <motion.div
+                initial={bloomFrom}
+                animate={bloomTo}
+                transition={bloomTransition}
+                style={{ transformOrigin: "2% 2%" }}
+                className="absolute inset-0"
+              >
+                <div className="hero-parchment-mask hero-parchment-fill absolute inset-0" />
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 1, ease: "easeOut", delay: 0.55 }}
+                  className="hero-parchment-mask hero-parchment-grain absolute inset-0"
+                />
+              </motion.div>
+            )}
 
             <div className="relative z-10 flex h-full max-w-[700px] flex-col justify-start px-8 pt-20 sm:px-12 sm:pt-24 lg:px-16 lg:pt-24">
               {LINES.map((line, i) => (
@@ -315,7 +342,9 @@ export function Hero() {
                     ease: TEXT_EASE,
                     delay: 1.05 + i * 0.16,
                   }}
-                  className="whitespace-nowrap font-serif text-[clamp(1.5rem,3.4vw,2.75rem)] font-medium leading-[1.35] tracking-[-0.01em] text-parchment-ink"
+                  className={`whitespace-nowrap font-serif text-[clamp(1.5rem,3.4vw,2.75rem)] font-medium leading-[1.35] tracking-[-0.01em] ${
+                    isPhone ? "text-parchment" : "text-parchment-ink"
+                  }`}
                 >
                   {line}
                 </motion.span>
