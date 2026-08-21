@@ -113,7 +113,12 @@ export function About() {
 
   return (
     <section
-      id="about"
+      // The #about nav anchor is a positioned element in page.tsx, not this
+      // panel: this one is sticky, so its document position changes depending
+      // on whether its container has been scrolled past, and a jump to it
+      // from further down the page would land at the *end* of the pin. The
+      // anchor there is pinned to ABOUT.wordsStart instead — the first frame
+      // of the reveal below.
       className="relative flex h-full w-full items-center justify-center overflow-hidden px-6"
       style={{ background: BRIDGE.gradient }}
       // The panel's mid band is what sits behind the nav for this whole beat.

@@ -7,8 +7,10 @@
    below: nothing is imported here that the page does not render, and the
    provider comes straight from the module that defines it. */
 import { FORGE_FLOOR, FORGE_GROUND } from "@/lib/forge";
+import { ABOUT } from "@/lib/heroBridge";
 import { Footer } from "@/components/Footer";
 import { IntroProvider } from "@/components/GateIntro/IntroContext";
+import { HashLanding } from "@/components/HashLanding";
 import { HeroLightBridge } from "@/components/HeroLightBridge";
 import { IntroAutoScroll } from "@/components/IntroAutoScroll";
 import { InkTransition } from "@/components/InkTransition";
@@ -57,6 +59,23 @@ const ABOUT_VH = 200;
 const FORGE_VH = 200;
 /** The strip that carries the forge's floor back up to paper — see below. */
 const FORGE_EXIT_VH = 18;
+/** Where the nav's "Approach" anchor sits inside the forge container, in vh.
+ *  Not its top: the ink flooding into the forge is still fully opaque there
+ *  (the transition below only begins thinning at 1.35 container-approaches,
+ *  and the container's top *is* 1.0), so an anchor on the container itself
+ *  would drop the visitor onto a flat gold field. Anything past 0.35 clears
+ *  the veil; this is comfortably past it and still well inside the 100vh
+ *  pin, so the scene is settled and filling the viewport on arrival. */
+const FORGE_ANCHOR_VH = 50;
+/** Where the nav's "About" anchor sits inside the About container, in vh.
+ *  Not its top either, and for the same reason as the forge's: at the top of
+ *  this container the light bridge is still holding solid over the seam
+ *  (BRIDGE.holdEnd is 2.0, exactly here, and it does not finish clearing
+ *  until 2.3), so the manifesto is behind an unbroken gold wash. The reveal's
+ *  own first frame is the honest target — derived from ABOUT.wordsStart, in
+ *  absolute page depth, minus the hero container above it — so the anchor
+ *  cannot drift if that timeline is ever retimed. */
+const ABOUT_ANCHOR_VH = ABOUT.wordsStart * 100 - HERO_VH;
 
 export default function Home() {
   return (
@@ -76,6 +95,11 @@ export default function Home() {
           a fixed ~3s beat, locking input so it can't be overshot — the page
           comes to rest mid-way through the About reveal. */}
       <IntroAutoScroll />
+      {/* Arriving here from another route with a fragment (#about, #services,
+          #approach — the nav's own links, from /contact) is a full load, and
+          the browser resolves the fragment against a page that is still
+          growing. This re-lands it once the layout has settled. */}
+      <HashLanding />
       {/* About → Founder's Note. fadeEnd matches the end of the About
           container, so the ink finishes clearing exactly as the note takes
           the viewport. */}
@@ -127,6 +151,18 @@ export default function Home() {
         </div>
 
         <div style={{ position: "relative", height: `${ABOUT_VH}vh` }}>
+          {/* Nav "About" target — the manifesto ("The past was built by master
+              craftsmen…"). A positioned element rather than an id on the
+              container or on the panel: the panel is sticky, so its own
+              document position depends on which way you arrived from, and the
+              container's top is still under the bridge's wash. See
+              ABOUT_ANCHOR_VH. */}
+          <div
+            id="about"
+            aria-hidden="true"
+            className="pointer-events-none absolute left-0 h-px w-px"
+            style={{ top: `${ABOUT_ANCHOR_VH}vh` }}
+          />
           <div style={{ position: "sticky", top: 0, height: "100vh", overflow: "hidden" }}>
             <About />
             <div
@@ -154,6 +190,15 @@ export default function Home() {
         <ServicesStack />
 
         <div id="dwarka" style={{ position: "relative", height: `${FORGE_VH}vh` }}>
+          {/* Nav "Approach" target — Before & After Dwarka. See FORGE_ANCHOR_VH
+              for why it is its own element partway down the container rather
+              than the container's own id. */}
+          <div
+            id="approach"
+            aria-hidden="true"
+            className="pointer-events-none absolute left-0 h-px w-px"
+            style={{ top: `${FORGE_ANCHOR_VH}vh` }}
+          />
           <div style={{ position: "sticky", top: 0, height: "100vh", overflow: "hidden" }}>
             <DeferredForge />
             <div
