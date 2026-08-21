@@ -17,6 +17,32 @@ import { onScrollFrame } from "@/lib/scrollScheduler";
    otherwise be able to escape the z-index of this component's fixed
    overlay canvas.
 
+   `veilMode` says which side of the seam that veil is protecting:
+
+     "cover"  (default) — the veil belongs to the section being LEFT, and
+                          ramps 0 → 1 so its content is hidden before the
+                          ink reaches it. Used above the fold, where the
+                          outgoing section is the sticky/WebGL one.
+     "reveal"           — the veil belongs to the section being ENTERED, and
+                          starts opaque, then fades out in lockstep with the
+                          canvas so the two dissolve together. Used when the
+                          *incoming* section is the sticky/WebGL one, which
+                          would otherwise be able to composite itself over
+                          the rising ink as it slides up into view.
+
+   Anchoring  (`anchorId`)
+   ───────────────────────
+   By default the phase thresholds are absolute page depths — viewport
+   heights from scrollY = 0 — which is exact but only usable while every
+   section above the transition has a known, fixed height. Pass `anchorId`
+   and the same numbers are measured against that element's approach
+   instead: 0 when its top sits at the bottom of the viewport, 1 when its
+   top reaches the top of the viewport. That costs one getBoundingClientRect
+   per frame (taken before any style write, so it never thrashes layout) and
+   in exchange the transition is immune to everything above it changing
+   height — which is the only safe option for a transition several
+   variable-height sections down the page.
+
    Animation phases  (all in multiples of window.innerHeight, configurable
    via props so the same component can drive multiple transitions at
    different scroll depths)
@@ -44,13 +70,22 @@ type InkTransitionProps = {
   color?: string;
   /** Gold shimmer color along the ink's leading edge, as an "R,G,B" triplet. */
   glowColor?: string;
-  /** id of the veil element (rendered by the page) that backstops this
-   *  transition's own sticky section from bleeding through the canvas. */
+  /** id of the veil element (rendered by the page) that backstops the
+   *  sticky section on one side of this seam from bleeding through the
+   *  canvas. Which side is decided by `veilMode`. */
   veilId?: string;
+  /** Whether `veilId` hides the section being left ("cover", the default) or
+   *  the section being entered ("reveal"). */
+  veilMode?: VeilMode;
+  /** id of the element whose approach drives the timeline. Omit to measure
+   *  absolute page depth from scrollY = 0. */
+  anchorId?: string;
   spreadStartVh?: number;
   spreadEndVh?: number;
   fadeEndVh?: number;
 };
+
+type VeilMode = "cover" | "reveal";
 
 const DEFAULT_COLOR = "#050403"; // exact match: BeforeAfterDwarka Backdrop + page bg
 const DEFAULT_GLOW = "200,162,74"; // --gold, #c8a24a
@@ -71,6 +106,8 @@ export function InkTransition({
   color = DEFAULT_COLOR,
   glowColor = DEFAULT_GLOW,
   veilId = DEFAULT_VEIL_ID,
+  veilMode = "cover",
+  anchorId,
   spreadStartVh = DEFAULT_SPREAD_START_VH,
   spreadEndVh = DEFAULT_SPREAD_END_VH,
   fadeEndVh = DEFAULT_FADE_END_VH,
@@ -185,7 +222,20 @@ export function InkTransition({
       // hiding them before the ink reaches them — no compositor fights needed.
       const veil = veilElement();
       if (veil) {
-        if (sy <= spreadStart) {
+        if (veilMode === "reveal") {
+          // The veil belongs to the section being entered, so it is opaque
+          // for the whole approach and then lets go exactly as fast as the
+          // canvas does — the two are the same colour, so together they read
+          // as one sheet of ink thinning away off the incoming scene.
+          if (sy <= spreadEnd) {
+            veil.style.opacity = "1";
+          } else if (sy >= fadeEnd) {
+            veil.style.opacity = "0";
+          } else {
+            const fp = (sy - spreadEnd) / (fadeEnd - spreadEnd);
+            veil.style.opacity = String(Math.max(0, 1 - Math.pow(fp, 1.6)));
+          }
+        } else if (sy <= spreadStart) {
           veil.style.opacity = "0";
         } else if (sy <= spreadEnd) {
           const p = (sy - spreadStart) / (spreadEnd - spreadStart);
@@ -227,12 +277,34 @@ export function InkTransition({
       drawInk(spread);
     }
 
+    // Resolved lazily like the veil: on a route where the anchor is rendered
+    // by the same tree, it exists by the first scroll frame regardless.
+    let anchor: HTMLElement | null = null;
+    function anchorElement() {
+      if (!anchor && anchorId) {
+        anchor = document.getElementById(anchorId) as HTMLElement | null;
+      }
+      return anchor;
+    }
+
+    /** Position along the timeline, in the same pixel units as the absolute
+     *  mode: 0 when the anchor's top is at the bottom of the viewport, H when
+     *  it has reached the top. Read before anything is written this frame. */
+    function anchorPosition(fallbackY: number): number {
+      const el = anchorElement();
+      if (!el) return fallbackY;
+      return H - el.getBoundingClientRect().top;
+    }
+
     measure();
     return onScrollFrame(({ y }) => {
+      // Order matters: the rect read has to happen before the style writes
+      // below, or every frame invalidates layout and then forces it again.
+      const position = anchorId ? anchorPosition(y) : y;
       if (measure()) paintedStep = -1;
-      update(y);
+      update(position);
     });
-  }, [color, glowColor, veilId, spreadStartVh, spreadEndVh, fadeEndVh]);
+  }, [color, glowColor, veilId, veilMode, anchorId, spreadStartVh, spreadEndVh, fadeEndVh]);
 
   return (
     <canvas

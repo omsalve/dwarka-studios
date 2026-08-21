@@ -7,19 +7,20 @@ import { BRIDGE } from "@/lib/heroBridge";
    IntroAutoScroll
    ─────────────────────────────────────────────────────────────────────
 
-   Turns the Hero → forge descent into a self-playing cinematic beat instead
+   Turns the Hero → About descent into a self-playing cinematic beat instead
    of a scrubbed one. While the page is at the top, the first downward scroll
    gesture (wheel / touch / key) is captured — not consumed as scroll — and
-   instead starts a fixed ~5.5s eased playback that drives window.scrollY
-   from the Hero all the way to the settled forge. Manual scroll input is
-   locked for the whole beat plus a short cooldown, so a single flick can no
-   longer overshoot the Before/After Dwarka section: the descent always plays
-   in full and comes to rest exactly there.
+   instead starts a fixed ~3s eased playback that drives window.scrollY from
+   the Hero through the light and into the gilded threshold. Manual scroll
+   input is locked for the whole beat plus a short cooldown, so a single flick
+   can no longer overshoot it: the descent always plays in full and comes to
+   rest exactly where BRIDGE.restDepth says, part-way through the About
+   reveal.
 
-   Everything visual is still driven off scrollY (Hero dive, the light bridge,
-   the forge arrival), so this component owns *timing* only — it never touches
-   the scenes directly. The eased time→depth curve spends most of the run on
-   the slow dive into the temple, then eases through the light into the forge.
+   Everything visual is still driven off scrollY (the Hero dive, the light
+   bridge, the About reveal), so this component owns *timing* only — it never
+   touches the sections directly. The eased time→depth curve spends most of
+   the run on the slow dive into the temple, then eases through the light.
 
    Disabled under prefers-reduced-motion (normal scrolling is left intact),
    and it never fires unless the page is genuinely at the top, so a reload
@@ -28,7 +29,7 @@ import { BRIDGE } from "@/lib/heroBridge";
 
 const DIVE_FRACTION = 0.6; // share of the runtime spent on the slow dive
 const DIVE_DEPTH = 1.0; //    scroll-depth reached by the end of the dive
-const COOLDOWN_MS = 700; //   held-still beat on the forge after landing
+const COOLDOWN_MS = 700; //   held-still beat on the threshold after landing
 
 type Phase = "armed" | "playing" | "cooldown" | "done";
 

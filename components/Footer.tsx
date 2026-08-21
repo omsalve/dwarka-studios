@@ -1,5 +1,4 @@
 import Image from "next/image";
-import { NAV_LINKS } from "@/lib/nav-links";
 import wordmark from "@/public/images/Wordmark_Realistic_trimmed.png";
 
 export function Footer() {
@@ -19,25 +18,13 @@ export function Footer() {
             </p>
           </div>
 
-          <nav className="flex flex-wrap gap-6 text-sm">
-            {NAV_LINKS.map((link) => (
-              <a
-                key={link.href}
-                href={link.href}
-                className="text-ink-soft transition-colors hover:text-ink"
-              >
-                {link.label}
-              </a>
-            ))}
-          </nav>
-
           <div className="text-sm">
             <p className="text-ink-soft">Let&apos;s build your world.</p>
             <a
-              href="mailto:hello@dwarkastudios.com"
+              href="mailto:info@dwarkastudio.in"
               className="mt-2 inline-block text-gold transition-colors hover:text-gold-deep"
             >
-              hello@dwarkastudios.com
+              info@dwarkastudio.in
             </a>
             <div className="mt-6 flex gap-4 text-ink-soft">
               <span>Instagram</span>

@@ -5,35 +5,33 @@ import { BRIDGE, clamp01, smoothstep } from "@/lib/heroBridge";
 import { onScrollFrame } from "@/lib/scrollScheduler";
 
 /* -----------------------------------------------------------------------
-   HeroForgeTransition
+   HeroLightBridge
    ─────────────────────────────────────────────────────────────────────
 
-   The luminous bridge between the Hero valley and the Dwarka forge. A
+   The luminous bridge between the Hero valley and the About threshold. A
    single fixed, full-viewport 2D canvas that is *the light itself* passing
-   between the two scenes — the Hero dives beneath it and the forge condenses
-   out of it above it, so this layer is only ever the shared warm-light state
-   the two scenes have in common.
+   between the two — the Hero dives beneath it and the threshold is revealed
+   above it, so this layer is only ever the warm-light state the two scenes
+   have in common.
 
    Deliberately shape-free: it is one full-frame champagne wash (a soft
-   vertical grade matching the forge backdrop — bright up top, deep antique
-   gold at the floor) that simply fades IN over the dive, HOLDS solid across
-   the section seam, then fades OUT to uncover the forge. No radial cores, no
-   glows, no reveal-hole — nothing that could read as a blob or edge moving
-   across the frame. The colour is sampled from the forge's own backdrop, so
-   fading it away reveals an identically-coloured scene: a seamless dissolve.
+   vertical grade — bright up top, deep antique gold at the floor) that
+   simply fades IN over the dive, HOLDS solid across the section seam, then
+   fades OUT. No radial cores, no glows, no reveal-hole — nothing that could
+   read as a blob or edge moving across the frame.
 
-   Depth is normally advanced by IntroAutoScroll on a ~5.5s eased clock, but
+   The three stops come from BRIDGE.gradient, which the About panel also
+   carries as its own CSS background. That is the whole trick: fading this
+   canvas away uncovers an identical gradient, so there is no dissolve to
+   see — the light turns out to have been a room.
+
+   Depth is normally advanced by IntroAutoScroll on a ~3s eased clock, but
    this component only ever renders the current scroll depth, so it behaves
    the same whether the descent is played or scrubbed.
    ----------------------------------------------------------------------- */
 
-// Sampled from the forge backdrop: champagne highlight → gold field → deep
-// antique-gold edge — the exact wash the Dwarka scene resolves to.
-const CHAMPAGNE = "231,206,140"; // #e7ce8c
-const GOLD_FIELD = "150,116,60"; // #96743c
-const DEEP_GOLD = "88,68,40"; //   #584428
 
-export function HeroForgeTransition() {
+export function HeroLightBridge() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -80,8 +78,8 @@ export function HeroForgeTransition() {
         return;
       }
 
-      // Fade in across the dive, hold solid over the seam, fade out to the
-      // forge — a single global alpha, no localized light anywhere.
+      // Fade in across the dive, hold solid over the seam, fade out onto the
+      // threshold — a single global alpha, no localized light anywhere.
       const ignite = smoothstep(BRIDGE.igniteStart, BRIDGE.bloomFull, depth);
       const part = smoothstep(BRIDGE.holdEnd, BRIDGE.clearEnd, depth);
       const alpha = clamp01(ignite * (1 - part));
@@ -94,9 +92,9 @@ export function HeroForgeTransition() {
 
       g.clearRect(0, 0, W, H);
       const grad = g.createLinearGradient(0, 0, 0, H);
-      grad.addColorStop(0, `rgba(${CHAMPAGNE},${alpha})`);
-      grad.addColorStop(0.5, `rgba(${GOLD_FIELD},${alpha})`);
-      grad.addColorStop(1, `rgba(${DEEP_GOLD},${alpha})`);
+      grad.addColorStop(0, `rgba(${BRIDGE.champagne},${alpha})`);
+      grad.addColorStop(0.5, `rgba(${BRIDGE.goldField},${alpha})`);
+      grad.addColorStop(1, `rgba(${BRIDGE.deepGold},${alpha})`);
       g.fillStyle = grad;
       g.fillRect(0, 0, W, H);
     }

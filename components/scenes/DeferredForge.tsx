@@ -23,10 +23,12 @@
 
 import dynamic from "next/dynamic";
 import { useRef } from "react";
+import { FORGE_FLOOR_RAMP, FORGE_GROUND } from "@/lib/forge";
 import { useNearViewport } from "@/lib/useVisibility";
 
-/** The forge's own backdrop colour — the placeholder *is* the scene's ground. */
-const FORGE_GROUND = "#6a5330";
+/* The scene's colours live in lib/forge.ts, not here: app/page.tsx is a
+   server component and needs the same two values, and a server component
+   cannot import a value out of a "use client" module. */
 
 const BeforeAfterDwarka = dynamic(
   () => import("@/components/BeforeAfterDwarka"),
@@ -35,9 +37,10 @@ const BeforeAfterDwarka = dynamic(
 
 export function DeferredForge() {
   const ref = useRef<HTMLDivElement>(null);
-  // The descent auto-plays to this scene ~3s after the splash ends, so the
-  // margin is deliberately generous: the chunk must already be parsed and the
-  // context already warm by the time the light parts.
+  // The margin is deliberately generous: this scene closes the page behind an
+  // ink wash that takes barely one viewport-height of scroll to clear, so the
+  // chunk must already be parsed and the WebGL context already warm by the
+  // time the gold thins away — there is no second chance to hide the build.
   const near = useNearViewport(ref, "250% 0px");
 
   return (
@@ -48,6 +51,19 @@ export function DeferredForge() {
       data-navbar-fg="#2a1e0d"
     >
       {near && <BeforeAfterDwarka />}
+      {/* The floor ramp. Sits over the canvas but under page.tsx's reveal
+          veil, so it is only ever visible once the ink has already cleared. */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          insetInline: 0,
+          bottom: 0,
+          height: "15%",
+          background: FORGE_FLOOR_RAMP,
+          pointerEvents: "none",
+        }}
+      />
     </div>
   );
 }

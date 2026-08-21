@@ -1,26 +1,31 @@
 /* -----------------------------------------------------------------------
-   Hero → Dwarka "descent into the forge" bridge — shared scroll timeline
+   Hero → About "descent into the threshold" bridge — shared scroll timeline
    ─────────────────────────────────────────────────────────────────────
 
    One source of truth so three independent pieces stay frame-locked:
 
-     • Hero.tsx              — dives into the temple, warms, sheds its text
-     • HeroForgeTransition   — ignites the temple's light, holds the
-                               threshold over the section seam, then parts
-     • BeforeAfterDwarka.tsx — the forge camera arrives and the orbs
-                               condense out of the parting light
+     • Hero.tsx           — dives into the temple, warms, sheds its text
+     • HeroLightBridge    — ignites the temple's light, holds the threshold
+                            over the section seam, then fades it away
+     • About.tsx          — the gilded room the light turns out to have been,
+                            lighting its manifesto word by word
 
    All thresholds are expressed in multiples of the viewport height H
    (= window.innerHeight), measured from document scrollY = 0 (page top,
-   Hero pinned). They mirror the vh-based scheme the old InkTransition used,
-   so they line up with the existing sticky-container layout in page.tsx:
+   Hero pinned). They line up with the sticky-container layout in page.tsx:
 
      container 1 (Hero)   = 200vh  → Hero pinned  scrollY 0 … 1.0·H
-                                    → forge fills viewport at scrollY 2.0·H
-     container 2 (forge)  = 180vh  → forge pinned scrollY 2.0·H … 2.8·H
+                                    → About fills viewport at scrollY 2.0·H
+     container 2 (About)  = 200vh  → About pinned scrollY 2.0·H … 3.0·H
+                                    → InkTransition floods 2.95·H … 4.0·H
 
    The unavoidable ~1·H seam (where the two stacked sticky sections cross)
    is the stretch we deliberately hold full-champagne — HOLD phase below.
+
+   The forge (BeforeAfterDwarka) is no longer part of this timeline: it now
+   closes the page, several sections down, where an absolute page depth would
+   be hostage to every section's height above it. Its arrival is measured
+   against its own container instead — see FORGE_ARRIVAL there.
    ----------------------------------------------------------------------- */
 
 export const BRIDGE = {
@@ -29,19 +34,16 @@ export const BRIDGE = {
   igniteStart: 0.3,
   /** Frame fully engulfed in champagne light; Hero is gone beneath it. */
   bloomFull: 0.98,
-  /** Light held over the section seam until the forge fills the viewport. */
+  /** Light held over the section seam until About fills the viewport. */
   holdEnd: 2.0,
-  /** Light has fully parted; the forge stands revealed. */
+  /** Light has fully cleared; the threshold stands revealed. */
   clearEnd: 2.3,
-  /** Forge camera + orbs begin settling (behind the still-parting light). */
-  arriveStart: 2.0,
-  /** Forge fully settled and at rest — where the timed descent comes to rest. */
-  arriveEnd: 2.5,
 
   /** Scroll depth (in viewport-heights) the timed descent comes to rest at —
-   *  the forge, settled, just before the forge→services transition begins. */
+   *  mid-way through the About reveal, so the visitor stops with the sentence
+   *  half-lit and the rest of it is what asks them to scroll on. */
   restDepth: 2.5,
-  /** Duration of the self-playing descent, in milliseconds (~2s). */
+  /** Duration of the self-playing descent, in milliseconds (~3s). */
   playMs: 3000,
 
   /** Screen-space anchor the descent focuses on (fraction of W, H) — the
@@ -49,6 +51,34 @@ export const BRIDGE = {
    *  ignition bloom grows from there rather than off to one side. */
   templeX: 0.5,
   templeY: 0.5,
+
+  /** The wash itself, as CSS. HeroLightBridge paints these three stops onto
+   *  its canvas and the About panel carries them as its background, which is
+   *  the entire trick: fading the canvas out reveals an identical gradient,
+   *  so there is no dissolve to see. Change one and you must change both —
+   *  which is why they live here rather than in either component. */
+  gradient:
+    "linear-gradient(180deg, #e7ce8c 0%, #96743c 50%, #584428 100%)",
+  /** The same three stops as "R,G,B" triplets, for the canvas. */
+  champagne: "231,206,140", // #e7ce8c
+  goldField: "150,116,60", //  #96743c
+  deepGold: "88,68,40", //     #584428
+} as const;
+
+/** Beats inside the About panel, in the same page-depth units as BRIDGE.
+ *  All of them start at or after BRIDGE.clearEnd — nothing in the room may
+ *  move while the wash is still covering it, or the "flat light" illusion
+ *  the seamless dissolve depends on is broken. */
+export const ABOUT = {
+  /** The chamber's shadow deepens around the words. */
+  scrimStart: 2.28,
+  scrimEnd: 2.5,
+  /** The manifesto lights word by word. */
+  wordsStart: 2.3,
+  wordsEnd: 2.8,
+  /** The invitation arrives once the sentence has finished. */
+  ctaStart: 2.62,
+  ctaEnd: 2.85,
 } as const;
 
 export function clamp01(x: number): number {

@@ -21,12 +21,7 @@ import { useDeviceBudget, type DeviceBudget } from "@/lib/deviceTier";
 import { onScrollFrame } from "@/lib/scrollScheduler";
 import { useSceneActive } from "@/lib/useVisibility";
 import { EASE } from "@/lib/motion";
-import {
-  BRIDGE,
-  easeOutCubic,
-  prefersReducedMotion,
-  smoothstep,
-} from "@/lib/heroBridge";
+import { easeOutCubic, prefersReducedMotion, smoothstep } from "@/lib/heroBridge";
 
 /* ----------------------------------------------------------------------- */
 /* Density budget                                                          */
@@ -47,6 +42,18 @@ const DENSITY = {
 function density(base: number, scale: number) {
   return Math.max(48, Math.round(base * scale));
 }
+
+/* -----------------------------------------------------------------------
+   Arrival window                                                          */
+/*                                                                         */
+/* In units of this section's own approach: 0 = its top is at the bottom   */
+/* of the viewport, 1 = its top has reached the top. The ink anchored to   */
+/* the same element finishes clearing at 1, so ending at 0.9 guarantees    */
+/* the camera and the orbs have come to rest just *before* anyone can see  */
+/* them. See lib/heroBridge.ts for why this is no longer a page depth.     */
+/* ----------------------------------------------------------------------- */
+
+const FORGE_ARRIVAL = { start: 0.3, end: 0.9 } as const;
 
 /* ----------------------------------------------------------------------- */
 /* Responsive stage layout                                                 */
@@ -1810,23 +1817,38 @@ export default function BeforeAfterDwarka() {
   // normally anywhere else.
   const { introComplete } = useIntro();
 
-  // Arrival progress, fed from the shared bridge timeline. 0 while the forge
-  // is still hidden inside the parting light, 1 once it has fully settled.
-  // Read imperatively inside the r3f render loop (camera + orbs), so scrolling
-  // never triggers a React re-render of the WebGL tree.
+  // Arrival progress. 0 while the forge is still buried under the gold ink
+  // rising over the services deck, 1 once the camera and the orbs have fully
+  // settled. Read imperatively inside the r3f render loop (camera + orbs), so
+  // scrolling never triggers a React re-render of the WebGL tree.
   const introRef = useRef(1);
 
-  // One shared rAF-coalesced scroll frame for the whole page (see
-  // lib/scrollScheduler) rather than this component's own listener + rAF —
-  // the hero dive, the light bridge and this arrival all now read the *same*
-  // scrollY within a frame, so they can never disagree about the depth.
+  // Measured against this scene's own shell rather than an absolute page
+  // depth. The forge used to sit directly under the hero, where the depth in
+  // viewport-heights was a fixed, knowable number; it now closes the page,
+  // below a founder's note and a four-card pinned deck whose heights are not
+  // ours to predict. `enter` below is the shell's own approach — 0 with its
+  // top at the bottom of the viewport, 1 once it has reached the top — which
+  // is exactly the unit the ink transition anchored to this section uses, so
+  // the two still resolve together to the frame.
+  //
+  // Still on the one shared rAF-coalesced scroll frame for the whole page
+  // (see lib/scrollScheduler) rather than this component's own listener.
   useEffect(() => {
-    if (prefersReducedMotion()) {
+    const shell = shellRef.current;
+    if (!shell || prefersReducedMotion()) {
       introRef.current = 1;
       return;
     }
-    return onScrollFrame(({ depth }) => {
-      introRef.current = smoothstep(BRIDGE.arriveStart, BRIDGE.arriveEnd, depth);
+    return onScrollFrame(({ vh }) => {
+      const enter = 1 - shell.getBoundingClientRect().top / vh;
+      // Settled a touch before the ink finishes clearing (enter = 1), so the
+      // scene is never caught still moving at the moment it is uncovered.
+      introRef.current = smoothstep(
+        FORGE_ARRIVAL.start,
+        FORGE_ARRIVAL.end,
+        enter
+      );
     });
   }, []);
 
